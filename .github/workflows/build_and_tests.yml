@@ -26,7 +26,10 @@ on:
 jobs:
   buildntest:
     name: Build and Tests
-    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        os: [ ubuntu-20.04, ubuntu-22.04 ]
+    runs-on: ${{ matrix.os }}
     steps:
     - run: |
         echo "Job triggered by ${{ github.event_name }} event, running on ${{ runner.os }}."
@@ -39,21 +42,21 @@ jobs:
       run: |
         sudo apt install ninja-build
 
-    - name: Fetch meson version 0.63.0 for building
+    - name: Fetch meson version for building
       uses: robinraju/release-downloader@v1.6
       with:
         repository: "mesonbuild/meson"
-        tag: "0.63.0"
+        tag: "0.53.2"
         fileName: "*.tar.gz"
 
     - name: Unpack meson tar ball and remove downloaded file
       run: |
-        tar -xzf meson-0.63.0.tar.gz
-        rm meson-0.63.0.tar.gz
+        tar -xzf meson-*.tar.gz
+        rm meson-*.tar.gz
 
     - name: Create symbolic link for Meson
       run: |
-        ln -s meson-0.63.0/meson.py .
+        ln -s meson-*/meson.py .
 
     - name: Configure build directories
       run: |
