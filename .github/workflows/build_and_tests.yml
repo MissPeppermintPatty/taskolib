@@ -1,4 +1,4 @@
-# Test
+# build_and_run_tests.yml
 
 name: Build and test run
 
@@ -25,6 +25,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   buildntest:
+    name: Build and Tests
     runs-on: ubuntu-20.04
     steps:
     - run: |
@@ -69,5 +70,3 @@ jobs:
 
     - name: Build and run ASAN tests
       run: ./meson.py test -C build.asan
-  with:
-    platforms: ubuntu-20.04
