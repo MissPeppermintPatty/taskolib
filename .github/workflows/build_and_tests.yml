@@ -1,6 +1,6 @@
-# build_and_run_tests.yml
+# Test
 
-name: Build and run tests (Linux)
+name: Build and test run
 
 # Controls when the action will run. Here when we enter 'git push'
 on:
@@ -11,8 +11,7 @@ on:
       - .vscode
       - data
       - debian
-      # TODO path to be ignored in future release: - @anchor_playground playground
-
+      # TODO path to be ignored in future release: - @anchor_playground playground  pull_request:
   pull_request:
     branches: main
     path-ignore:
@@ -20,13 +19,13 @@ on:
       - .vscode
       - data
       - debian
-      # TODO path to be ignored in future release: - *anchor_playground
+      # TODO path to be ignored in future release: - @anchor_playground playground
   workflow_dispatch:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  build-and-run-tests-on-ubuntu-20.04:
-    runs-on: ${{ inputs.platform }}
+  buildntest:
+    runs-on: ubuntu-20.04
     steps:
     - run: |
         echo "Job triggered by ${{ github.event_name }} event, running on ${{ runner.os }}."
