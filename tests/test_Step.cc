@@ -35,6 +35,11 @@ using namespace std::literals;
 using namespace task;
 using namespace Catch::Matchers;
 
+TEST_CASE("Step: Failure", "[Step]")
+{
+    REQUIRE(1 == 2);
+}
+
 TEST_CASE("Step: Default constructor", "[Step]")
 {
     static_assert(std::is_default_constructible<Step>::value,
