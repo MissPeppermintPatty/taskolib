@@ -22,7 +22,10 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
+#include <limits>
+
 #include <gul14/gul.h>
+
 #include "internals.h"
 #include "lua_details.h"
 #include "taskolib/CommChannel.h"
@@ -111,31 +114,6 @@ void check_script_timeout(lua_State* lua_state)
     }
 }
 
-std::variant<sol::object, std::string>
-execute_lua_script_safely(sol::state& lua, sol::string_view script)
-{
-    try
-    {
-        auto protected_result = lua.safe_script(script, sol::script_pass_on_error);
-
-        if (!protected_result.valid())
-        {
-            sol::error err = protected_result;
-            return cat("Script execution error: ", err.what());
-        }
-
-        return static_cast<sol::object>(protected_result);
-    }
-    catch(const std::exception& e)
-    {
-        return cat("Script execution error: ", e.what());
-    }
-    catch(...)
-    {
-        return std::string{ "Unknown C++ exception" };
-    }
-}
-
 CommChannel* get_comm_channel_ptr_from_registry(lua_State* lua_state)
 {
     sol::state_view lua(lua_state);
@@ -164,6 +142,11 @@ long long get_ms_since_epoch(TimePoint t0, std::chrono::milliseconds dt)
 {
     using std::chrono::milliseconds;
     using std::chrono::round;
+
+    static_assert(std::numeric_limits<long long>::max()
+                  >= std::numeric_limits<TimePoint::rep>::max());
+    static_assert(std::numeric_limits<long long>::max()
+                  >= std::numeric_limits<milliseconds::rep>::max());
 
     const long long t0_ms = round<milliseconds>(t0.time_since_epoch()).count();
     const long long max_dt = std::numeric_limits<long long>::max() - t0_ms;

@@ -22,153 +22,27 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
+#include <limits>
+
 #include <gul14/catch.h>
-#include <gul14/time_util.h>
 
 #include "../src/lua_details.h"
 
+using namespace std::chrono;
 using namespace std::literals;
 using namespace task;
-using namespace Catch::Matchers;
 
-TEST_CASE("execute_lua_script_safely(): Return values from simple scripts without errors",
-    "[lua_details]")
+TEST_CASE("get_ms_since_epoch()", "[lua_details]")
 {
-    sol::state lua;
+    const auto now = Clock::now();
 
-    SECTION("Empty script")
+    REQUIRE(get_ms_since_epoch(TimePoint{}, 100ms) == 100);
+    REQUIRE(get_ms_since_epoch(now, 100ms)
+            == round<milliseconds>((now + 100ms).time_since_epoch()).count());
+
+    if constexpr (milliseconds::max().count() >= std::numeric_limits<long long>::max())
     {
-        auto result_or_error = execute_lua_script_safely(lua, "");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(*result == sol::nil);
-    }
-
-    SECTION("return nil")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return nil");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(*result == sol::nil);
-    }
-
-    SECTION("return true")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return true");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<bool>() == true);
-    }
-
-    SECTION("return false")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return false");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<bool>() == false);
-    }
-
-    SECTION("return 42")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return 42");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<int>() == 42);
-    }
-
-    SECTION("return 4.2")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return 4.2");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<double>() == 4.2);
-    }
-
-    SECTION("return 'pippo'")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "return 'pippo'");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<std::string>() == "pippo");
-    }
-}
-
-TEST_CASE("execute_lua_script_safely(): Lua exceptions", "[lua_details]")
-{
-    sol::state lua;
-    open_safe_library_subset(lua); // for error() and pcall()
-
-    SECTION("Syntax error")
-    {
-        auto result_or_error = execute_lua_script_safely(lua, "not a lua program");
-        auto* msg = std::get_if<std::string>(&result_or_error);
-        REQUIRE(msg != nullptr);
-        REQUIRE(*msg != "");
-    }
-
-    SECTION("Runtime error")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "function boom(); error('mindful' .. 'ness', 0); end; boom()");
-        auto* msg = std::get_if<std::string>(&result_or_error);
-        REQUIRE(msg != nullptr);
-        REQUIRE_THAT(*msg, StartsWith("Script execution error: mindfulness"));
-        // Lua adds a stack trace after this output. This is a somewhat brittle test,
-        // but since we have control over our Lua version, we are sure to spot it if
-        // the output format changes.
-    }
-
-    SECTION("Runtime error, caught by pcall()")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "function boom(); b = nil; b(); end; pcall(boom); return 42");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<int>() == 42);
-    }
-}
-
-TEST_CASE("execute_lua_script_safely(): C++ exceptions", "[Step]")
-{
-    sol::state lua;
-    open_safe_library_subset(lua); // for error() and pcall()
-
-    lua["throw_logic_error"] = []() { throw std::logic_error("red rabbit"); };
-    lua["throw_weird_exception"] = []() { struct Weird{}; throw Weird{}; };
-
-    SECTION("C++ standard exception are reported as errors with error message")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "throw_logic_error()");
-        auto* msg = std::get_if<std::string>(&result_or_error);
-        REQUIRE(msg != nullptr);
-        REQUIRE_THAT(*msg, Contains("red rabbit"));
-    }
-
-    SECTION("Nonstandard C++ exceptions are reported as errors")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "throw_weird_exception()");
-        auto* msg = std::get_if<std::string>(&result_or_error);
-        REQUIRE(msg != nullptr);
-        REQUIRE(*msg != "");
-    }
-
-    SECTION("Standard C++ exceptions are converted to Lua errors and caught by pcall()")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "pcall(throw_logic_error); return 42");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<int>() == 42);
-    }
-
-    SECTION("Nonstandard C++ exceptions are converted to Lua errors and caught by pcall()")
-    {
-        auto result_or_error = execute_lua_script_safely(
-            lua, "pcall(throw_weird_error); return 42");
-        auto* result = std::get_if<sol::object>(&result_or_error);
-        REQUIRE(result != nullptr);
-        REQUIRE(result->as<int>() == 42);
+        REQUIRE(get_ms_since_epoch(now, milliseconds::max())
+                == std::numeric_limits<long long>::max());
     }
 }

@@ -30,6 +30,7 @@
 #include "lua_details.h"
 #include "sol/sol.hpp"
 #include "taskolib/exceptions.h"
+#include "taskolib/execute_lua_script.h"
 #include "taskolib/Step.h"
 
 using namespace std::literals;
@@ -61,9 +62,12 @@ void Step::copy_used_variables_from_context_to_lua(const Context& context, sol::
                 using T = std::decay_t<decltype(value)>;
 
                 if constexpr (std::is_same_v<T, double> or std::is_same_v<T, long long> or
-                              std::is_same_v<T, std::string>)
+                              std::is_same_v<T, std::string> or std::is_same_v<T, bool>)
                 {
                     lua[varname_str] = value;
+                }
+                else if constexpr (std::is_same_v<T, sol::lua_nil_t>) {
+                    lua[varname_str] = sol::lua_nil_t{ };
                 }
                 else
                 {
@@ -93,24 +97,20 @@ void Step::copy_used_variables_from_lua_to_context(const sol::state& lua, Contex
             case sol::type::string:
                 context.variables[varname] = VariableValue{ var.as<std::string>() };
                 break;
+            case sol::type::boolean:
+                context.variables[varname] = VariableValue{ var.as<bool>() };
+                break;
+            case sol::type::lua_nil:
+                context.variables.erase(varname);
+                break;
             default:
                 break;
         }
     }
 }
 
-bool Step::execute(Context& context, CommChannel* comm, StepIndex index)
+bool Step::execute_impl(Context& context, CommChannel* comm, StepIndex index)
 {
-    const auto now = Clock::now();
-
-    const auto set_is_running_to_false_after_execution =
-        gul14::finally([this]() { set_running(false); });
-
-    set_running(true);
-    set_time_of_last_execution(now);
-
-    send_message(comm, Message::Type::step_started, "Step started", now, index);
-
     sol::state lua;
 
     open_safe_library_subset(lua);
@@ -119,57 +119,69 @@ bool Step::execute(Context& context, CommChannel* comm, StepIndex index)
     if (context.lua_init_function)
         context.lua_init_function(lua);
 
-    install_timeout_and_termination_request_hook(lua, now, get_timeout(), index, comm);
+    install_timeout_and_termination_request_hook(lua, Clock::now(), get_timeout(), index,
+                                                 comm);
+
     copy_used_variables_from_context_to_lua(context, lua);
-
-    auto result_or_error = execute_lua_script_safely(lua, get_script());
-
+    const auto result_or_error = execute_lua_script(lua, get_script());
     copy_used_variables_from_lua_to_context(lua, context);
-    bool result_bool = false;
-
-    if (std::holds_alternative<sol::object>(result_or_error))
-    {
-        const auto& obj = std::get<sol::object>(result_or_error);
-
-        if (requires_bool_return_value(get_type()))
-        {
-            if (obj.is<bool>())
-            {
-                result_bool = obj.as<bool>();
-            }
-            else
-            {
-                result_or_error = cat("A script in a ", to_string(get_type()),
-                    " step must return a boolean value (true or false).");
-            }
-        }
-        else
-        {
-            if (obj != sol::nil)
-            {
-                result_or_error = cat("A script in a ", to_string(get_type()),
-                    " step may not return any value.");
-            }
-        }
-    }
 
     if (std::holds_alternative<std::string>(result_or_error))
-    {
-        const auto& raw_msg = std::get<std::string>(result_or_error);
-        auto [msg, _] = remove_abort_markers(raw_msg);
+        throw Error(std::get<std::string>(result_or_error));
 
+    const auto& obj = std::get<sol::object>(result_or_error);
+
+    if (requires_bool_return_value(get_type()))
+    {
+        if (not obj.is<bool>())
+        {
+            throw Error(cat("A script in a ", to_string(get_type()),
+                " step must return a boolean value (true or false)."));
+        }
+
+        return obj.as<bool>();
+    }
+    else
+    {
+        if (obj != sol::nil)
+        {
+            throw Error(cat("A script in a ", to_string(get_type()),
+                " step may not return any value."));
+        }
+
+        return false;
+    }
+}
+
+bool Step::execute(Context& context, CommChannel* comm, StepIndex index)
+{
+    const auto now = Clock::now();
+    const auto set_is_running_to_false_after_execution =
+        gul14::finally([this]() { set_running(false); });
+
+    set_time_of_last_execution(now);
+    set_running(true);
+    send_message(comm, Message::Type::step_started, "Step started", now, index);
+
+    try
+    {
+        const bool result = execute_impl(context, comm, index);
+
+        send_message(comm, Message::Type::step_stopped,
+            requires_bool_return_value(get_type())
+                ? cat("Step finished (logical result: ", result ? "true" : "false", ')')
+                : "Step finished"s,
+            Clock::now(), index);
+
+        return result;
+    }
+    catch(const std::exception& e)
+    {
+        auto [msg, _] = remove_abort_markers(e.what());
         send_message(comm, Message::Type::step_stopped_with_error, msg, Clock::now(),
                      index);
-        throw ErrorAtIndex(raw_msg, index);
+        throw ErrorAtIndex(e.what(), index);
     }
-
-    send_message(comm, Message::Type::step_stopped,
-        requires_bool_return_value(get_type())
-            ? cat("Step finished (logical result: ", result_bool ? "true" : "false", ')')
-            : "Step finished"s,
-        Clock::now(), index);
-
-    return result_bool;
 }
 
 Step& Step::set_disabled(bool disable)
