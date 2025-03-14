@@ -1,10 +1,10 @@
 /**
- * \file   test_Sequence.cc
- * \author Marcus Walla
- * \date   Created on February 8, 2022
- * \brief  Test suite for the the Sequence class.
+ * \file    test_Sequence.cc
+ * \authors Marcus Walla, Lars Fröhlich, Ulf Fini Jastrow
+ * \date    Created on February 8, 2022
+ * \brief   Test suite for the the Sequence class.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2024 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -23,82 +23,51 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <gul14/catch.h>
+#include <gul14/time_util.h>
+
 #include "taskolib/Sequence.h"
 
-using namespace task;
 using namespace std::literals;
+using namespace task;
+using namespace task::literals;
+using Catch::Matchers::Contains;
 
-TEST_CASE("Sequence: Constructor without descriptive label", "[Sequence]")
+TEST_CASE("Sequence: Constructor", "[Sequence]")
 {
-    REQUIRE_THROWS_AS(Sequence{ "" }, Error);
-    REQUIRE_THROWS_AS(Sequence{ " \t\v\n\r\f" }, Error);
-}
-
-TEST_CASE("Sequence: Constructor with descriptive label", "[Sequence]")
-{
-    // label is to many characters -> throws Error
-    REQUIRE_THROWS_AS(Sequence{ std::string(Sequence::max_label_length + 1, 'c') },
-        Error);
-    // minimum label length with one character
-    REQUIRE_NOTHROW(Sequence{ "S" });
-    // label length with all characters filled
-    REQUIRE_NOTHROW(Sequence{ std::string(Sequence::max_label_length, 'c') });
-}
-
-TEST_CASE("Sequence: Constructor with get label", "[Sequence]")
-{
-    SECTION("label with leading blanks")
+    SECTION("No arguments")
     {
-        Sequence seq{ " test_sequence" };
-        REQUIRE(seq.get_label() == "test_sequence" );
+        Sequence sequence;
+        REQUIRE(sequence.empty());
+        REQUIRE(sequence.get_label() == "");
+        REQUIRE(sequence.get_name() == SequenceName{ "" });
     }
 
-    SECTION("label with trailing blanks")
+    SECTION("Label specified")
     {
-        Sequence seq{ "test_sequence " };
-        REQUIRE(seq.get_label() == "test_sequence" );
+        REQUIRE_THROWS_AS(Sequence{ " a\nb " }, Error);
+        REQUIRE_THROWS_AS(Sequence{ std::string(Sequence::max_label_length + 1, '+') }, Error);
+
+        REQUIRE(Sequence{ "" }.get_label() == "");
+        REQUIRE(Sequence{ " \t\v\n\r\f" }.get_label() == "");
+        REQUIRE(Sequence{ "abc" }.get_label() == "abc");
+
+        Sequence sequence{ "This is a label" };
+        REQUIRE(sequence.empty());
+        REQUIRE(sequence.get_label() == "This is a label");
     }
 
-    SECTION("label with leading tab")
+    SECTION("Label and name specified")
     {
-        Sequence seq{ "\ttest_sequence" };
-        REQUIRE(seq.get_label() == "test_sequence" );
+        REQUIRE(Sequence{ "abc", SequenceName{ "Jim" } }.get_label() == "abc");
+        REQUIRE(Sequence{ "abc", SequenceName{ "Jim" } }.get_name() == SequenceName{ "Jim" });
     }
 
-    SECTION("label with trailing tab")
+    SECTION("Label, name, and unique ID specified")
     {
-        Sequence seq{ "test_sequence\t" };
-        REQUIRE(seq.get_label() == "test_sequence" );
+        REQUIRE(Sequence{ "abc", SequenceName{ "Jim" }, 0xdeadbeef_uid }.get_label() == "abc");
+        REQUIRE(Sequence{ "abc", SequenceName{ "Jim" }, 0xdeadbeef_uid }.get_name() == SequenceName{ "Jim" });
+        REQUIRE(Sequence{ "abc", SequenceName{ "Jim" }, 0xdeadbeef_uid }.get_unique_id() == 0xdeadbeef_uid);
     }
-
-    SECTION("label surrounded with multiple whitespaces")
-    {
-        Sequence seq{ " \t\r\n\v\ftest_sequence \r\t\v\f\n" };
-        REQUIRE(seq.get_label() == "test_sequence" );
-    }
-}
-
-TEST_CASE("Sequence: Construct an empty Sequence", "[Sequence]")
-{
-    Sequence s{ "test_sequence" };
-    REQUIRE(s.size() == 0);
-    REQUIRE(s.empty());
-    REQUIRE(s.begin() == s.end());
-    REQUIRE(s.cbegin() == s.cend());
-}
-
-TEST_CASE("Sequence: get and set sequence label", "[Sequence]")
-{
-    Sequence s{ "test_sequence" };
-    REQUIRE(s.get_label() == "test_sequence");
-
-    s.set_label("modified_test_sequence");
-    REQUIRE(s.get_label() == "modified_test_sequence");
-
-    REQUIRE_THROWS_AS(s.set_label(std::string(Sequence::max_label_length + 1, 'a')),
-        Error);
-    REQUIRE_THROWS_AS(s.set_label(""), Error);
-    REQUIRE_NOTHROW(s.set_label(std::string(Sequence::max_label_length, 'c')));
 }
 
 TEST_CASE("Sequence: assign()", "[Sequence]")
@@ -108,7 +77,7 @@ TEST_CASE("Sequence: assign()", "[Sequence]")
     seq.push_back(Step{Step::type_action});
     seq.push_back(Step{Step::type_action});
 
-    SECTION("assign step as lvalue (iterator)")
+    SECTION("assign step as lvalue")
     {
         Step step{Step::type_if};
         seq.assign(seq.begin()+1, step);
@@ -119,7 +88,7 @@ TEST_CASE("Sequence: assign()", "[Sequence]")
             REQUIRE(step.get_type() == expected[idx++]);
     }
 
-    SECTION("assign step as rvalue (iterator)")
+    SECTION("assign step as rvalue")
     {
         seq.assign(seq.begin()+1, Step{Step::type_if});
 
@@ -141,107 +110,192 @@ TEST_CASE("Sequence: empty()", "[Sequence]")
 TEST_CASE("Sequence: erase()", "[Sequence]")
 {
     Sequence seq{ "test_sequence" };
-    seq.push_back(Step{Step::type_action});
-    seq.push_back(Step{Step::type_while});
-    seq.push_back(Step{Step::type_action});
-    seq.push_back(Step{Step::type_end});
-    seq.push_back(Step{Step::type_action});
+    seq.push_back(Step{Step::type_action}); // idx 0
 
-    SECTION("erase first (iterator)")
+    Step step{ Step::type_while };
+    step.set_script("return true");
+    seq.push_back(step); // idx 1
+
+    step.set_type(Step::type_action);
+    step.set_script("not a valid Lua script");
+    seq.push_back(step); // idx 2
+
+    seq.push_back(Step{Step::type_end}); // idx 3
+    seq.push_back(Step{Step::type_action}); // idx 4
+
+    // Execute the script so that it fails at index 2 and the sequence stores error info
+    Context context;
+    auto err = seq.execute(context, nullptr);
+    REQUIRE(err.has_value());
+    REQUIRE(err->get_index().has_value());
+    REQUIRE(err->get_index().value() == 2);
+
+    SECTION("erase first")
     {
         auto erase = seq.erase(seq.begin());
         REQUIRE(not seq.empty());
         REQUIRE(4 == seq.size());
         REQUIRE(Step::type_while == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 1);
     }
 
-    SECTION("erase middle (iterator)")
+    SECTION("erase middle")
     {
         auto erase = seq.erase(seq.begin()+2);
         REQUIRE(not seq.empty());
         REQUIRE(4 == seq.size());
         REQUIRE(Step::type_end == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().has_value() == false);
     }
 
-    SECTION("erase last (iterator)")
+    SECTION("erase last")
     {
         auto erase = seq.erase(seq.end()-1);
         REQUIRE(not seq.empty());
         REQUIRE(4 == seq.size());
         REQUIRE(Step::type_action == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 2);
     }
 
-    SECTION("erase end (iterator)")
+    SECTION("erase end")
     {
         seq.erase(seq.end());
         REQUIRE(not seq.empty());
         REQUIRE(4 == seq.size());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 2);
     }
 
-    SECTION("erase range from beginning (iterator)")
+    SECTION("erase range from beginning")
     {
         auto erase = seq.erase(seq.begin(), seq.begin()+2);
         REQUIRE(not seq.empty());
         REQUIRE(3 == seq.size());
         REQUIRE(Step::type_action == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 0);
     }
 
-    SECTION("erase range from middle (iterator)")
+    SECTION("erase range from middle")
     {
         auto erase = seq.erase(seq.begin()+1, seq.begin()+3);
         REQUIRE(not seq.empty());
         REQUIRE(3 == seq.size());
         REQUIRE(Step::type_end == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().has_value() == false);
     }
 
-    SECTION("erase range from end (iterator)")
+    SECTION("erase range from end")
     {
         auto erase = seq.erase(seq.end()-3, seq.end()-1);
         REQUIRE(not seq.empty());
         REQUIRE(3 == seq.size());
         REQUIRE(Step::type_action == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().has_value() == false);
     }
 
-    SECTION("erase range from end (iterator)")
+    SECTION("erase range from end")
     {
         auto erase = seq.erase(seq.end()-2, seq.end());
         REQUIRE(not seq.empty());
         REQUIRE(3 == seq.size());
         REQUIRE(Step::type_end == (*erase).get_type());
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 2);
     }
 }
 
-TEST_CASE("Sequence: get_error_message()", "[Sequence]")
+TEST_CASE("Sequence: get_error()", "[Sequence]")
 {
     Sequence seq{ "test_sequence" };
-    REQUIRE(seq.get_error_message() == "");
+    REQUIRE(seq.get_error().has_value() == false);
 
-    seq.set_error_message("Test");
-    REQUIRE(seq.get_error_message() == "Test");
+    seq.set_error(Error{ "Test", gul14::nullopt });
+    REQUIRE(seq.get_error().has_value());
+    REQUIRE(seq.get_error()->what() == "Test"s);
+    REQUIRE(seq.get_error()->get_index().has_value() == false);
+
+    seq.set_error(Error{ "Test2", 42 });
+    REQUIRE(seq.get_error().has_value());
+    REQUIRE(seq.get_error()->what() == "Test2"s);
+    REQUIRE(seq.get_error()->get_index().has_value());
+    REQUIRE(seq.get_error()->get_index().value() == 42);
+}
+
+TEST_CASE("Sequence: get_folder()", "[Sequence]")
+{
+    REQUIRE(Sequence{ "", SequenceName{ "name" }, 0xfeeddeadbeef_uid }.get_folder()
+        == "name[0000feeddeadbeef]");
+    REQUIRE(Sequence{ "A/\"sequence\"$<again>", SequenceName{ "my_seq_name" }, 1_uid }
+        .get_folder() == "my_seq_name[0000000000000001]");
+    REQUIRE(Sequence{ "", SequenceName{}, 0x1234_uid }.get_folder()
+        == "[0000000000001234]");
+}
+
+TEST_CASE("Sequence: get_label()", "[Sequence]")
+{
+    Sequence s;
+    REQUIRE(s.get_label() == "");
+
+    s.set_label("Another label");
+    REQUIRE(s.get_label() == "Another label");
+}
+
+TEST_CASE("Sequence: get_name()", "[Sequence]")
+{
+    Sequence s;
+    REQUIRE(s.get_name() == SequenceName{""});
+
+    s.set_name(SequenceName{ "a_rose_by_any_other_name" });
+    REQUIRE(s.get_name() == SequenceName{ "a_rose_by_any_other_name" });
+}
+
+TEST_CASE("Sequence: get_tags()", "[Sequence]")
+{
+    Sequence s;
+    REQUIRE(s.get_tags().empty());
+
+    const std::vector<Tag> tags{ Tag{ "tag1" }, Tag{ "tag2" }, Tag{ "tag3" } };
+
+    s.set_tags(tags);
+    REQUIRE(s.get_tags() == tags);
+
+    s.set_tags(std::vector<Tag>{});
+    REQUIRE(s.get_tags().empty());
+}
+
+TEST_CASE("Sequence: get_unique_id()", "[Sequence]")
+{
+    Sequence seq1;
+    Sequence seq2;
+    REQUIRE(seq1.get_unique_id() != seq2.get_unique_id());
+
+    seq1.set_unique_id(0xdeadbeef_uid);
+    REQUIRE(seq1.get_unique_id() == 0xdeadbeef_uid);
 }
 
 TEST_CASE("Sequence: insert()", "[Sequence]")
 {
     Sequence seq{ "test_sequence" };
-    seq.push_back(Step{Step::type_action});
-    seq.push_back(Step{Step::type_action});
+    seq.push_back(Step{Step::type_action}); // idx 0
 
-    SECTION("insert lvalue reference (iterator)")
-    {
-        Step insertStep{Step::type_if};
-        auto iter = seq.insert(seq.begin()+1, insertStep);
+    Step step{ Step::type_action };
+    step.set_script("not a valid Lua script");
+    seq.push_back(step); // idx 1
 
-        REQUIRE(not seq.empty());
-        REQUIRE(3 == seq.size());
-        REQUIRE(Step::type_if == (*iter).get_type());
+    // Execute the script so that it fails at index 1 and the sequence stores error info
+    Context context;
+    auto err = seq.execute(context, nullptr);
+    REQUIRE(err.has_value());
+    REQUIRE(err->get_index().has_value());
+    REQUIRE(err->get_index().value() == 1);
 
-        Step::Type expected[] = {Step::type_action, Step::type_if, Step::type_action};
-        int idx = 0;
-        for(auto step : seq)
-            REQUIRE(step.get_type() == expected[idx++]);
-    }
-
-    SECTION("insert const lvalue reference (iterator)")
+    SECTION("insert const reference")
     {
         const Step insertStep{Step::type_if};
         auto iter = seq.insert(seq.begin()+1, insertStep);
@@ -254,20 +308,26 @@ TEST_CASE("Sequence: insert()", "[Sequence]")
         int idx = 0;
         for(auto step : seq)
             REQUIRE(step.get_type() == expected[idx++]);
+
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 2);
     }
 
-    SECTION("insert rvalue reference (iterator)")
+    SECTION("insert rvalue reference")
     {
-        auto iter = seq.insert(seq.begin()+1, Step{Step::type_if});
+        auto iter = seq.insert(seq.begin()+2, Step{Step::type_if});
 
         REQUIRE(not seq.empty());
         REQUIRE(3 == seq.size());
         REQUIRE(Step::type_if == (*iter).get_type());
 
-        Step::Type expected[] = {Step::type_action, Step::type_if, Step::type_action};
+        Step::Type expected[] = {Step::type_action, Step::type_action, Step::type_if};
         int idx = 0;
         for(auto step : seq)
             REQUIRE(step.get_type() == expected[idx++]);
+
+        REQUIRE(seq.get_error().has_value());
+        REQUIRE(seq.get_error()->get_index().value_or(-1) == 1);
     }
 }
 
@@ -282,12 +342,12 @@ TEST_CASE("Sequence: is_running()", "[Sequence]")
     REQUIRE(not seq.is_running());
 
     Context ctx;
-    seq.execute(ctx, nullptr);
+    REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
 
     REQUIRE(not seq.is_running());
 
     seq.set_running(true);
-    REQUIRE(seq.is_running() == true);
+    REQUIRE(seq.is_running());
 
     seq.set_running(false);
     REQUIRE(seq.is_running() == false);
@@ -367,13 +427,25 @@ TEST_CASE("Sequence: modify()", "[Sequence]")
 TEST_CASE("Sequence: pop_back()", "[Sequence]")
 {
     Sequence seq{ "test_sequence" };
-    seq.push_back(Step{});
-    seq.push_back(Step{});
+    seq.push_back(Step{}); // idx 0
+
+    Step step{ Step::type_action };
+    step.set_script("not a valid Lua script");
+    seq.push_back(step); // idx 1
     REQUIRE(seq.empty() == false);
     REQUIRE(seq.size() == 2);
 
+    // Execute the script so that it fails at index 1 and the sequence stores error info
+    Context context;
+    auto err = seq.execute(context, nullptr);
+    REQUIRE(err.has_value());
+    REQUIRE(err->get_index().has_value());
+    REQUIRE(err->get_index().value() == 1);
+
     seq.pop_back();
     REQUIRE(seq.size() == 1);
+    REQUIRE(seq.get_error().has_value());
+    REQUIRE(seq.get_error()->get_index().has_value() == false);
 
     seq.pop_back();
     REQUIRE(seq.size() == 0);
@@ -412,15 +484,31 @@ TEST_CASE("Sequence: push_back()", "[Sequence]")
     }
 }
 
-TEST_CASE("Sequence: set_error_message()", "[Sequence]")
+TEST_CASE("Sequence: set_error()", "[Sequence]")
 {
     Sequence seq{ "test_sequence" };
 
-    seq.set_error_message("Test");
-    REQUIRE(seq.get_error_message() == "Test");
+    seq.set_error(Error{ "Test", 42 });
+    REQUIRE(seq.get_error().has_value());
+    REQUIRE(seq.get_error()->what() == "Test"s);
+    REQUIRE(seq.get_error()->get_index().has_value());
+    REQUIRE(seq.get_error()->get_index().value() == 42);
 
-    seq.set_error_message("");
-    REQUIRE(seq.get_error_message() == "");
+    seq.set_error(gul14::nullopt);
+    REQUIRE(seq.get_error().has_value() == false);
+}
+
+TEST_CASE("Sequence: set_label()", "[Sequence]")
+{
+    Sequence s;
+
+    s.set_label("  Another label\t");
+    REQUIRE(s.get_label() == "Another label");
+
+    REQUIRE_THROWS_AS(s.set_label("a\nb"), Error);
+    REQUIRE_THROWS_AS(s.set_label(std::string(Sequence::max_label_length + 1, 'a')),
+        Error);
+    REQUIRE_NOTHROW(s.set_label(std::string(Sequence::max_label_length, 'c')));
 }
 
 TEST_CASE("Sequence: set_running()", "[Sequence]")
@@ -437,7 +525,7 @@ TEST_CASE("Sequence: set_running()", "[Sequence]")
     seq.push_back(step1);
 
     seq.set_running(true);
-    REQUIRE(seq.is_running() == true);
+    REQUIRE(seq.is_running());
 
     SECTION("Sequence can be modified while not is_running()")
     {
@@ -479,7 +567,37 @@ TEST_CASE("Sequence: set_running()", "[Sequence]")
 
         REQUIRE_THROWS_AS(seq.pop_back(), Error);
         REQUIRE(seq.size() == 1);
+
+        REQUIRE_THROWS_AS(seq.set_step_setup_script("b = 1"), Error);
+        REQUIRE(seq.get_step_setup_script() == "");
     }
+}
+
+TEST_CASE("Sequence: set_tags()", "[Sequence]")
+{
+    Sequence s;
+
+    const std::vector<Tag> tags{ Tag{ "tag1" }, Tag{ "tag2" }, Tag{ "tag3" } };
+
+    s.set_tags(tags);
+    REQUIRE(s.get_tags() == tags);
+
+    s.set_tags(std::vector<Tag>{});
+    REQUIRE(s.get_tags().empty());
+
+    s.set_tags(
+        std::vector<Tag>{ Tag{ "TAG3" }, Tag{ "Tag2" }, Tag{ "tag3" }, Tag{ "tag1" } });
+    REQUIRE(s.get_tags() == tags);
+}
+
+TEST_CASE("Sequence: set_unique_id()", "[Sequence]")
+{
+    Sequence seq{ "test_sequence" };
+
+    seq.set_unique_id(1234_uid);
+    REQUIRE(seq.get_unique_id() == 1234_uid);
+    seq.set_unique_id(0xdeadbeef_uid);
+    REQUIRE(seq.get_unique_id() == 0xdeadbeef_uid);
 }
 
 TEST_CASE("Sequence: check correctness of try-catch-end 1", "[Sequence]")
@@ -491,7 +609,7 @@ TEST_CASE("Sequence: check correctness of try-catch-end 1", "[Sequence]")
         END
     */
 
-    Sequence sequence("validating try-catch-end 1 correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_action});
@@ -518,7 +636,7 @@ TEST_CASE("Sequence: check correctness of try-catch-end 2", "[Sequence]")
         END
     */
 
-    Sequence sequence("validating try-catch-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_action});
@@ -550,7 +668,7 @@ TEST_CASE("Sequence: check correctness of try-try-catch-end-catch-end", "[Sequen
             ACTION
         END
     */
-    Sequence sequence("validating try-try-catch-end-catch-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_try});
@@ -572,7 +690,7 @@ TEST_CASE("Sequence: check fault for try", "[Sequence]")
     /*
         TRY
     */
-    Sequence sequence("validating try-catch correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
 
@@ -589,7 +707,7 @@ TEST_CASE("Sequence: check fault for try-try", "[Sequence]")
         TRY
         TRY
     */
-    Sequence sequence("validating try-catch correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_try});
@@ -609,7 +727,7 @@ TEST_CASE("Sequence: check fault for try-catch", "[Sequence]")
             ACTION
         CATCH
     */
-    Sequence sequence("validating try-catch correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_action});
@@ -630,7 +748,7 @@ TEST_CASE("Sequence: check fault for try-end", "[Sequence]")
         TRY
         END
     */
-    Sequence sequence("validating try-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_end});
@@ -652,7 +770,7 @@ TEST_CASE("Sequence: check fault for try-catch-catch-end", "[Sequence]")
         CATCH
         END
     */
-    Sequence sequence("validating try-catch-catch-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_try});
     sequence.push_back(Step{Step::type_action});
@@ -678,7 +796,7 @@ TEST_CASE("Sequence: check correctness of if-end", "[Sequence]")
             ACTION
         END
     */
-    Sequence sequence("validating if-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -702,7 +820,7 @@ TEST_CASE("Sequence: check correctness of if-else-end", "[Sequence]")
             ACTION
         END
     */
-    Sequence sequence("validating if-else-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -732,7 +850,7 @@ TEST_CASE("Sequence: check correctness of if-elseif-else-end", "[Sequence]")
             ACTION
         END
     */
-    Sequence sequence("validating if-else-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -768,7 +886,7 @@ TEST_CASE("Sequence: check correctness of if-elseif-elseif-else-end", "[Sequence
             ACTION
         END
     */
-    Sequence sequence("validating if-else-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -810,7 +928,7 @@ TEST_CASE("Sequence: check if-elseif-try-catch-end-elseif-end w/ empty catch blo
             ACTION
         END
     */
-    Sequence sequence("validating if-elseif-try-catch-end-else-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -855,7 +973,7 @@ TEST_CASE("Sequence: check correctness of if-elseif-try-catch-end-elseif-end",
             ACTION
         END
     */
-    Sequence sequence("validating if-elseif-try-catch-end-else-end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
@@ -898,7 +1016,7 @@ TEST_CASE("Sequence: if-elseif-while-end-else-end with empty while loop", "[Sequ
         06:     ACTION
         07: END
     */
-    Sequence sequence("validating if-elseif-while-end-else-end correctness");
+    Sequence sequence;
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
     sequence.push_back(Step{Step::type_elseif});
@@ -936,7 +1054,7 @@ TEST_CASE("Sequence: check correctness of if-elseif-while-end-else-end", "[Seque
         07:     ACTION
         08: END
     */
-    Sequence sequence("validating if-elseif-while-end-else-end correctness");
+    Sequence sequence;
     sequence.push_back(Step{Step::type_if});
     sequence.push_back(Step{Step::type_action});
     sequence.push_back(Step{Step::type_elseif});
@@ -966,7 +1084,7 @@ TEST_CASE("Sequence: check fault for end", "[Sequence]")
     /*
         END
     */
-    Sequence sequence("validating end correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
 
@@ -983,7 +1101,7 @@ TEST_CASE("Sequence: check fault for end-action", "[Sequence]")
         END
         ACTION
     */
-    Sequence sequence("validating end-action correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_action});
@@ -1002,7 +1120,7 @@ TEST_CASE("Sequence: check fault for end-try", "[Sequence]")
         END
         TRY
     */
-    Sequence sequence("validating end-try correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_try});
@@ -1021,7 +1139,7 @@ TEST_CASE("Sequence: check fault for end-catch", "[Sequence]")
         END
         CATCH
     */
-    Sequence sequence("validating end-catch correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_catch});
@@ -1040,7 +1158,7 @@ TEST_CASE("Sequence: check fault for end-if", "[Sequence]")
         END
         IF
     */
-    Sequence sequence("validating end-if correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_if});
@@ -1059,7 +1177,7 @@ TEST_CASE("Sequence: check fault for end-elseif", "[Sequence]")
         END
         ELSE IF
     */
-    Sequence sequence("validating end-elseif correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_elseif});
@@ -1078,7 +1196,7 @@ TEST_CASE("Sequence: check fault for end-else", "[Sequence]")
         END
         ELSE
     */
-    Sequence sequence("validating end-else correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_else});
@@ -1097,7 +1215,7 @@ TEST_CASE("Sequence: check fault for end-while", "[Sequence]")
         END
         WHILE
     */
-    Sequence sequence("validating end-while correctness");
+    Sequence sequence;
 
     sequence.push_back(Step{Step::type_end});
     sequence.push_back(Step{Step::type_while});
@@ -1113,10 +1231,10 @@ TEST_CASE("Sequence: check fault for end-while", "[Sequence]")
 TEST_CASE("execute(): empty sequence", "[Sequence]")
 {
     Context context;
-    Sequence sequence("Empty sequence");
+    Sequence sequence;
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() == "");
+    REQUIRE(sequence.get_error().has_value() == false);
 }
 
 TEST_CASE("execute(): simple sequence", "[Sequence]")
@@ -1124,33 +1242,33 @@ TEST_CASE("execute(): simple sequence", "[Sequence]")
     Context context;
     Step step;
 
-    Sequence sequence("Simple sequence");
+    Sequence sequence;
     sequence.push_back(step);
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() == "");
+    REQUIRE(sequence.get_error().has_value() == false);
 }
 
 TEST_CASE("execute(): Simple sequence with unchanged context", "[Sequence]")
 {
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
     Step step;
     step.set_used_context_variable_names(VariableNames{"a"});
 
-    Sequence sequence("Simple sequence");
+    Sequence sequence;
     sequence.push_back(step);
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() == "");
-    REQUIRE(context.variables["a"] == VariableValue{ 0LL } );
+    REQUIRE(sequence.get_error().has_value() == false);
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 0);
 }
 
 TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]")
 {
     Context ctx;
-    ctx.variables["a"] = VariableValue{ 0LL };
+    ctx.variables["a"] = VarInteger{ 0 };
     Sequence seq("Simple sequence");
 
     SECTION("Dont manipulate context variable") {
@@ -1158,8 +1276,8 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
         s1.set_script("a = 2");
 
         seq.push_back(s1);
-        seq.execute(ctx, nullptr);
-        REQUIRE(ctx.variables["a"] == VariableValue{ 0LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 0);
     }
     SECTION("Manipulate context variable") {
         Step s1;
@@ -1167,8 +1285,8 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
         s1.set_used_context_variable_names(VariableNames{"a"});
 
         seq.push_back(s1);
-        seq.execute(ctx, nullptr);
-        REQUIRE(ctx.variables["a"] == VariableValue{ 2LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 2);
     }
     SECTION("Hand context variable over (not)") {
         Step s1;
@@ -1179,8 +1297,8 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
 
         seq.push_back(s1);
         seq.push_back(s2);
-        seq.execute(ctx, nullptr);
-        REQUIRE(ctx.variables["a"] == VariableValue{ 2LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 2);
     }
     SECTION("Hand context variable over") {
         Step s1;
@@ -1192,8 +1310,8 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
 
         seq.push_back(s1);
         seq.push_back(s2);
-        seq.execute(ctx, nullptr);
-        REQUIRE(ctx.variables["a"] == VariableValue{ 4LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 4);
     }
     SECTION("Hand variable over context without initial value") {
         Step s1;
@@ -1205,8 +1323,8 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
 
         seq.push_back(s1);
         seq.push_back(s2);
-        seq.execute(ctx, nullptr);
-        REQUIRE(ctx.variables["a"] == VariableValue{ 4LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 4);
     }
     SECTION("Hand bool variable over context without initial value") {
         Step s1;
@@ -1218,9 +1336,9 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
 
         seq.push_back(s1);
         seq.push_back(s2);
-        seq.execute(ctx, nullptr);
-        CAPTURE(std::get<long long>(ctx.variables["a"]));
-        REQUIRE(ctx.variables["a"] == VariableValue{ 4LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        CAPTURE(std::get<VarInteger>(ctx.variables["a"]));
+        REQUIRE(ctx.variables["a"] == VariableValue{ VarInteger{ 4 }}); // Another variant to check variables
     }
     SECTION("Hand nil variable over context without initial value") {
         Step s1;
@@ -1236,9 +1354,9 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
         seq.push_back(s1);
         seq.push_back(s2);
         seq.push_back(s3);
-        seq.execute(ctx, nullptr);
-        CAPTURE(std::get<long long>(ctx.variables["a"]));
-        REQUIRE(ctx.variables["a"] == VariableValue{ 4LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        CAPTURE(std::get<VarInteger>(ctx.variables["a"]));
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 4);
         REQUIRE_THROWS(ctx.variables.at("b")); // nil means not-existing
     }
     SECTION("Check nil is really non-existing") {
@@ -1264,14 +1382,14 @@ TEST_CASE("execute(): Simple sequence with more context variables", "[Sequence]"
         seq.push_back(s2);
         seq.push_back(s3);
         seq.push_back(s4);
-        seq.execute(ctx, nullptr);
-        CAPTURE(std::get<long long>(ctx.variables["a"]));
-        REQUIRE(ctx.variables["a"] == VariableValue{ 1LL } );
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        CAPTURE(std::get<VarInteger>(ctx.variables["a"]));
+        REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 1);
         REQUIRE_THROWS(ctx.variables.at("b")); // nil means not-existing
     }
 }
 
-TEST_CASE("execute(): complex sequence with prohibited LUA function", "[Sequence]")
+TEST_CASE("execute(): complex sequence with prohibited Lua function", "[Sequence]")
 {
     Context context;
 
@@ -1280,18 +1398,23 @@ TEST_CASE("execute(): complex sequence with prohibited LUA function", "[Sequence
     step.set_type(Step::type_action);
     step.set_script("require 'io'"); // provokes Error exception
 
-    Sequence sequence("Complex sequence");
+    Sequence sequence;
     sequence.push_back(step);
 
-    REQUIRE_THROWS(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() != "");
+    auto maybe_error = sequence.execute(context, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE(maybe_error->what() != ""s);
+    REQUIRE(maybe_error->get_index().has_value());
+    REQUIRE(maybe_error->get_index().value() == 0);
+
+    REQUIRE(sequence.get_error() == maybe_error);
 }
 
 TEST_CASE("execute(): complex sequence with disallowed 'function' and context "
           "change", "[Sequence]")
 {
     Context context;
-    context.variables["a"] = VariableValue{ 1LL };
+    context.variables["a"] = VarInteger{ 1 };
 
     Step step_action1;
     step_action1.set_label("Action");
@@ -1303,19 +1426,25 @@ TEST_CASE("execute(): complex sequence with disallowed 'function' and context "
     step_action2.set_type(Step::type_action);
     step_action2.set_script("a=a+1");
 
-    Sequence sequence("Complex sequence");
+    Sequence sequence;
     sequence.push_back(step_action1);
     sequence.push_back(step_action2);
 
-    REQUIRE_THROWS(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() != "");
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 1LL );
+    auto maybe_error = sequence.execute(context, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE(maybe_error->what() != ""s);
+    REQUIRE(maybe_error->get_index().has_value());
+    REQUIRE(maybe_error->get_index().value() == 0);
+
+    REQUIRE(sequence.get_error() == maybe_error);
+
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 1);
 }
 
 TEST_CASE("execute(): complex sequence with context change", "[Sequence]")
 {
     Context context;
-    context.variables["a"] = VariableValue{ 1LL };
+    context.variables["a"] = VarInteger{ 1 };
 
     Step step_action1;
     step_action1.set_label("Action1");
@@ -1323,12 +1452,12 @@ TEST_CASE("execute(): complex sequence with context change", "[Sequence]")
     step_action1.set_script("a=a+1");
     step_action1.set_used_context_variable_names(VariableNames{"a"});
 
-    Sequence sequence("Complex sequence");
+    Sequence sequence;
     sequence.push_back(step_action1);
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(sequence.get_error_message() == "");
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+    REQUIRE(sequence.get_error().has_value() == false);
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
 }
 
 TEST_CASE("execute(): if-else sequence", "[Sequence]")
@@ -1382,19 +1511,19 @@ TEST_CASE("execute(): if-else sequence", "[Sequence]")
     SECTION("if-else sequence with if=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
     }
 
     SECTION("if-else sequence with if=false")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
     }
 }
 
@@ -1449,28 +1578,28 @@ TEST_CASE("execute(): if-elseif sequence", "[Sequence]")
     SECTION("if-elseif sequence with if=elseif=false")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 0LL };
+        context.variables["a"] = VarInteger{ 0 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 0LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 0);
     }
 
     SECTION("if-elseif sequence with if=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
     }
 
     SECTION("if-elseif sequence with elseif=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
     }
 }
 
@@ -1539,28 +1668,28 @@ TEST_CASE("execute(): if-elseif-else sequence", "[Sequence]")
     SECTION("if-elseif-else sequence with if=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
     }
 
     SECTION("if-elseif-else sequence with elseif=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
     }
 
     SECTION("if-elseif-else sequence with else=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 3LL };
+        context.variables["a"] = VarInteger{ 3 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 4LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 4);
     }
 }
 
@@ -1629,37 +1758,37 @@ TEST_CASE("execute(): if-elseif-elseif sequence", "[Sequence]")
     SECTION("if-elseif-elseif sequence with if=elseif=elseif=false")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 0LL };
+        context.variables["a"] = VarInteger{ 0 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 0LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 0);
     }
 
     SECTION("if-elseif-elseif sequence with if=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
     }
 
     SECTION("if-elseif-elseif sequence with elseif[1]=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
     }
 
     SECTION("if-elseif-elseif sequence with elseif[2]=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 3LL };
+        context.variables["a"] = VarInteger{ 3 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 4LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 4);
     }
 }
 
@@ -1741,37 +1870,37 @@ TEST_CASE("execute(): if-elseif-elseif-else sequence", "[Sequence]")
     SECTION("if-elseif-elseif sequence with if=elseif=elseif=false")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 0LL };
+        context.variables["a"] = VarInteger{ 0 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 5LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 5);
     }
 
     SECTION("if-elseif-elseif sequence with if=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
     }
 
     SECTION("if-elseif-elseif sequence with elseif[1]=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
     }
 
     SECTION("if-elseif-elseif sequence with elseif[2]=true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 3LL };
+        context.variables["a"] = VarInteger{ 3 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 4LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 4);
     }
 }
 
@@ -1825,28 +1954,28 @@ TEST_CASE("execute(): if-elseif-else-end sequence with empty blocks", "[Sequence
     SECTION("IF condition true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 1LL };
+        context.variables["a"] = VarInteger{ 1 };
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
     }
 
     SECTION("First ELSEIF condition true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 2LL };
+        context.variables["a"] = VarInteger{ 2 };
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
     }
 
     SECTION("Second ELSEIF condition true")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 3LL };
+        context.variables["a"] = VarInteger{ 3 };
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
     }
 
     SECTION("All conditions false, use ELSE branch")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 4LL };
+        context.variables["a"] = VarInteger{ 4 };
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
     }
 }
@@ -1913,11 +2042,17 @@ TEST_CASE("execute(): faulty if-else-elseif sequence", "[Sequence]")
     sequence.push_back(step_if_end);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
-    REQUIRE(sequence.get_error_message() == "");
-    REQUIRE_THROWS_AS(sequence.execute(context, nullptr), Error);
-    REQUIRE(sequence.get_error_message() != "");
+    REQUIRE(sequence.get_error().has_value() == false);
+
+    auto maybe_error = sequence.execute(context, nullptr);
+
+    REQUIRE(maybe_error.has_value());
+    REQUIRE(maybe_error->what() != ""s);
+    REQUIRE(maybe_error->get_index().has_value() == false);
+
+    REQUIRE(sequence.get_error() == maybe_error);
 }
 
 TEST_CASE("execute(): while sequence", "[Sequence]")
@@ -1957,10 +2092,10 @@ TEST_CASE("execute(): while sequence", "[Sequence]")
     SECTION("while sequence with while: a<10")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 0LL };
+        context.variables["a"] = VarInteger{ 0 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
     }
 }
 
@@ -1994,10 +2129,10 @@ TEST_CASE("execute(): empty while sequence", "[Sequence]")
     SECTION("while sequence with while: a<10")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 0LL };
+        context.variables["a"] = VarInteger{ 0 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
     }
 }
 
@@ -2046,10 +2181,10 @@ TEST_CASE("execute(): try sequence with success", "[Sequence]")
     sequence.push_back(step_try_end);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 1LL );
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 1);
 }
 
 TEST_CASE("execute(): try sequence with fault", "[Sequence]")
@@ -2104,10 +2239,10 @@ TEST_CASE("execute(): try sequence with fault", "[Sequence]")
     sequence.push_back(step_try_end);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
 }
 
 TEST_CASE("execute(): complex try sequence with nested fault condition",
@@ -2196,10 +2331,10 @@ TEST_CASE("execute(): complex try sequence with nested fault condition",
     sequence.push_back(step_10);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
     REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 3LL );
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 3);
 }
 
 TEST_CASE("execute(): simple try sequence with fault", "[Sequence]")
@@ -2262,11 +2397,15 @@ TEST_CASE("execute(): simple try sequence with fault", "[Sequence]")
     sequence.push_back(step_06);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    context.variables["a"] = VarInteger{ 0 };
 
-    REQUIRE_THROWS_AS(sequence.execute(context, nullptr), Error);
-    REQUIRE(sequence.get_error_message() != "");
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+    auto maybe_error = sequence.execute(context, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE(maybe_error->what() != ""s);
+    REQUIRE(maybe_error->get_index().has_value());
+    REQUIRE(maybe_error->get_index().value() == 5);
+    REQUIRE(sequence.get_error() == maybe_error);
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
 }
 
 TEST_CASE("execute(): complex try sequence with fault", "[Sequence]")
@@ -2361,10 +2500,10 @@ TEST_CASE("execute(): complex try sequence with fault", "[Sequence]")
     sequence.push_back(step_11);
 
     Context context;
-    context.variables["a"] = VariableValue{ 0LL };
+    auto maybe_error = sequence.execute(context, nullptr);
+    REQUIRE(maybe_error.has_value());
 
-    REQUIRE_THROWS_AS(sequence.execute(context, nullptr), Error);
-    REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
 }
 
 TEST_CASE("execute(): complex sequence", "[Sequence]")
@@ -2625,89 +2764,89 @@ TEST_CASE("execute(): complex sequence", "[Sequence]")
     {
         Context context;
         // a=0, b=0, c=0, d=0/1/2, e=1/2/3, f=0, g=2/1
-        context.variables["a"] = VariableValue{0LL};
-        context.variables["b"] = VariableValue{0LL};
-        context.variables["c"] = VariableValue{0LL};
-        context.variables["d"] = VariableValue{0LL};
-        context.variables["e"] = VariableValue{1LL};
-        context.variables["f"] = VariableValue{1LL};
-        context.variables["g"] = VariableValue{1LL};
+        context.variables["a"] = VarInteger{ 0 };
+        context.variables["b"] = VarInteger{ 0 };
+        context.variables["c"] = VarInteger{ 0 };
+        context.variables["d"] = VarInteger{ 0 };
+        context.variables["e"] = VarInteger{ 1 };
+        context.variables["f"] = VarInteger{ 1 };
+        context.variables["g"] = VarInteger{ 1 };
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
 
         // a=10, b=1, c=1, d=0/2/3, e=1/3/4, f=2, g=1/2
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["c"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["d"] ) == 0LL );
-        REQUIRE(std::get<long long>(context.variables["e"] ) == 1LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["f"] ) == 1LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["g"] ) == 1LL ); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["c"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["d"]) == 0);
+        REQUIRE(std::get<VarInteger>(context.variables["e"]) == 1); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["f"]) == 1); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["g"]) == 1); // not touched
     }
 
     SECTION("complex sequence: a: 0->10, b: 0->1, c: 0->1, d: 1->3, e: 1->2, f: 1->1, "
             "g: 1->1")
     {
         Context context;
-        context.variables["a"] = VariableValue{0LL};
-        context.variables["b"] = VariableValue{0LL};
-        context.variables["c"] = VariableValue{0LL};
-        context.variables["d"] = VariableValue{1LL};
-        context.variables["e"] = VariableValue{1LL};
-        context.variables["f"] = VariableValue{1LL};
-        context.variables["g"] = VariableValue{1LL};
+        context.variables["a"] = VarInteger{ 0 };
+        context.variables["b"] = VarInteger{ 0 };
+        context.variables["c"] = VarInteger{ 0 };
+        context.variables["d"] = VarInteger{ 1 };
+        context.variables["e"] = VarInteger{ 1 };
+        context.variables["f"] = VarInteger{ 1 };
+        context.variables["g"] = VarInteger{ 1 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["c"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["d"] ) == 3LL );
-        REQUIRE(std::get<long long>(context.variables["e"] ) == 2LL );
-        REQUIRE(std::get<long long>(context.variables["f"] ) == 1LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["g"] ) == 1LL ); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["c"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["d"]) == 3);
+        REQUIRE(std::get<VarInteger>(context.variables["e"]) == 2);
+        REQUIRE(std::get<VarInteger>(context.variables["f"]) == 1); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["g"]) == 1); // not touched
     }
 
     SECTION("complex sequence: a: 0->10, b: 0->1, c: 0->1, d: 2->3, e: 5->5, f: 2->2, "
             "g: 3->3")
     {
         Context context;
-        context.variables["a"] = VariableValue{0LL};
-        context.variables["b"] = VariableValue{0LL};
-        context.variables["c"] = VariableValue{1LL};
-        context.variables["d"] = VariableValue{2LL};
-        context.variables["e"] = VariableValue{5LL};
-        context.variables["f"] = VariableValue{3LL};
-        context.variables["g"] = VariableValue{2LL};
+        context.variables["a"] = VarInteger{ 0 };
+        context.variables["b"] = VarInteger{ 0 };
+        context.variables["c"] = VarInteger{ 1 };
+        context.variables["d"] = VarInteger{ 2 };
+        context.variables["e"] = VarInteger{ 5 };
+        context.variables["f"] = VarInteger{ 3 };
+        context.variables["g"] = VarInteger{ 2 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["c"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["d"] ) == 3LL );
-        REQUIRE(std::get<long long>(context.variables["e"] ) == 5LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["f"] ) == 3LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["g"] ) == 2LL ); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["c"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["d"]) == 3);
+        REQUIRE(std::get<VarInteger>(context.variables["e"]) == 5); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["f"]) == 3); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["g"]) == 2); // not touched
     }
 
     SECTION("complex sequence: a: 0->10, b: 0->1, c: 0->1, d: 1->3, e: 2->4, f: 3->2, "
             "g: 4->2")
     {
         Context context;
-        context.variables["a"] = VariableValue{0LL};
-        context.variables["b"] = VariableValue{0LL};
-        context.variables["c"] = VariableValue{1LL};
-        context.variables["d"] = VariableValue{1LL};
-        context.variables["e"] = VariableValue{2LL};
-        context.variables["f"] = VariableValue{3LL};
-        context.variables["g"] = VariableValue{4LL};
+        context.variables["a"] = VarInteger{ 0 };
+        context.variables["b"] = VarInteger{ 0 };
+        context.variables["c"] = VarInteger{ 1 };
+        context.variables["d"] = VarInteger{ 1 };
+        context.variables["e"] = VarInteger{ 2 };
+        context.variables["f"] = VarInteger{ 3 };
+        context.variables["g"] = VarInteger{ 4 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 10LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["c"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["d"] ) == 3LL );
-        REQUIRE(std::get<long long>(context.variables["e"] ) == 3LL );
-        REQUIRE(std::get<long long>(context.variables["f"] ) == 3LL ); // not touched
-        REQUIRE(std::get<long long>(context.variables["g"] ) == 4LL ); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 10);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["c"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["d"]) == 3);
+        REQUIRE(std::get<VarInteger>(context.variables["e"]) == 3);
+        REQUIRE(std::get<VarInteger>(context.variables["f"]) == 3); // not touched
+        REQUIRE(std::get<VarInteger>(context.variables["g"]) == 4); // not touched
     }
 }
 
@@ -2862,7 +3001,9 @@ TEST_CASE("execute(): complex sequence with misplaced if", "[Sequence]")
     sequence.push_back(step_31);
 
     Context context;
-    REQUIRE_THROWS_AS(sequence.execute(context, nullptr), Error);
+
+    auto maybe_error = sequence.execute(context, nullptr);
+    REQUIRE(maybe_error.has_value());
 }
 
 TEST_CASE("execute_sequence(): Messages", "[execute_sequence]")
@@ -2872,7 +3013,7 @@ TEST_CASE("execute_sequence(): Messages", "[execute_sequence]")
     auto& queue = comm.queue_;
 
     Context context;
-    context.variables["a"] = 0LL;
+    context.variables["a"] = VarInteger{ 0 };
 
     Step step1{ Step::type_action };
     step1.set_used_context_variable_names(VariableNames{ "a" });
@@ -2886,7 +3027,7 @@ TEST_CASE("execute_sequence(): Messages", "[execute_sequence]")
     sequence.push_back(std::move(step1));
     sequence.push_back(std::move(step2));
 
-    sequence.execute(context, &comm);
+    REQUIRE(sequence.execute(context, &comm) == gul14::nullopt);
 
     // 2 sequence messages plus 4 step start/stop messages
     REQUIRE(queue.size() == 6);
@@ -2926,6 +3067,77 @@ TEST_CASE("execute_sequence(): Messages", "[execute_sequence]")
     REQUIRE(msg.get_type() == Message::Type::sequence_stopped);
     REQUIRE(msg.get_timestamp() >= t0);
     REQUIRE(msg.get_timestamp() - t0 < 1s);
+}
+
+TEST_CASE("execute_sequence(): Message callbacks", "[execute_sequence]")
+{
+    std::string str;
+
+    Context context;
+    context.message_callback_function = [&str](const Message& msg) -> void
+        {
+            switch (msg.get_type())
+            {
+            case Message::Type::output:
+                str += ("[OUTPUT(" + msg.get_text() + ")]"); break;
+            case Message::Type::sequence_started:
+                str += "[SEQ_START]"; break;
+            case Message::Type::sequence_stopped:
+                str += "[SEQ_STOP]"; break;
+            case Message::Type::sequence_stopped_with_error:
+                str += "[SEQ_STOP_ERR]"; break;
+            case Message::Type::step_started:
+                str += "[STEP_START]"; break;
+            case Message::Type::step_stopped:
+                str += "[STEP_STOP]"; break;
+            case Message::Type::step_stopped_with_error:
+                str += "[STEP_STOP_ERR]"; break;
+            case Message::Type::undefined:
+                throw Error("Undefined message type");
+            }
+        };
+
+    Sequence sequence{ "test_sequence" };
+
+    SECTION("Sequence ending successfully")
+    {
+        Step step1{ Step::type_action };
+        step1.set_script("print('American River')");
+
+        Step step2{ Step::type_action };
+        step2.set_script("a = 2");
+
+        sequence.push_back(std::move(step1));
+        sequence.push_back(std::move(step2));
+
+        REQUIRE(sequence.execute(context, nullptr) == gul14::nullopt);
+
+        REQUIRE(str ==
+            "[SEQ_START]"
+                "[STEP_START][OUTPUT(American River\n)][STEP_STOP]"
+                "[STEP_START][STEP_STOP]"
+            "[SEQ_STOP]");
+    }
+
+    SECTION("Sequence ending with error")
+    {
+        Step step1{ Step::type_action };
+        step1.set_script("print('Coyote Creek')");
+
+        Step step2{ Step::type_action };
+        step2.set_script("boom()");
+
+        sequence.push_back(std::move(step1));
+        sequence.push_back(std::move(step2));
+
+        REQUIRE(sequence.execute(context, nullptr) != gul14::nullopt);
+
+        REQUIRE(str ==
+            "[SEQ_START]"
+                "[STEP_START][OUTPUT(Coyote Creek\n)][STEP_STOP]"
+                "[STEP_START][STEP_STOP_ERR]"
+            "[SEQ_STOP_ERR]");
+    }
 }
 
 TEST_CASE("execute(): if-elseif-else sequence with disable", "[Sequence]")
@@ -3000,11 +3212,11 @@ TEST_CASE("execute(): if-elseif-else sequence with disable", "[Sequence]")
     SECTION("All steps enabled")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 5LL };
+        context.variables["a"] = VarInteger{ 5 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 2LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 2);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
     }
 
     sequence.modify(sequence.begin() + 1, [](Step& s) {
@@ -3015,11 +3227,11 @@ TEST_CASE("execute(): if-elseif-else sequence with disable", "[Sequence]")
     SECTION("Second step disabled")
     {
         Context context;
-        context.variables["a"] = VariableValue{ 5LL };
+        context.variables["a"] = VarInteger{ 5 };
 
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 1LL );
-        REQUIRE(std::get<long long>(context.variables["b"] ) == 1LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 1);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 1);
     }
 }
 
@@ -3047,7 +3259,7 @@ TEST_CASE("execute(): sequence with multiple disabled", "[Sequence]")
     {
         Context context;
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 6LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 6);
     }
 
     sequence.modify(sequence.begin() + 1, [](Step& s) {
@@ -3058,7 +3270,7 @@ TEST_CASE("execute(): sequence with multiple disabled", "[Sequence]")
     {
         Context context;
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 5LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 5);
     }
 
     sequence.modify(sequence.begin() + 2, [](Step& s) {
@@ -3069,11 +3281,15 @@ TEST_CASE("execute(): sequence with multiple disabled", "[Sequence]")
     {
         Context context;
         REQUIRE_NOTHROW(sequence.execute(context, nullptr));
-        REQUIRE(std::get<long long>(context.variables["a"] ) == 4LL );
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 4);
     }
 }
 
+namespace {
+
 auto copy_and_disable(Step x) -> Step { return x.set_disabled(true), x; }
+
+} // anonymous namespace
 
 TEST_CASE("execute(): disable 'invariant' (direct)", "[Sequence]")
 {
@@ -3147,7 +3363,7 @@ TEST_CASE("execute(): disable 'invariant' (direct)", "[Sequence]")
         sequence.push_back(step_post); // b = 1
 
         Context context;
-        context.variables["a"] = VariableValue{ 5LL };
+        context.variables["a"] = VarInteger{ 5 };
 
         REQUIRE(sequence[0].is_disabled() == false);
         REQUIRE(sequence[1].is_disabled() == true);
@@ -3174,7 +3390,7 @@ TEST_CASE("execute(): disable 'invariant' (direct)", "[Sequence]")
         sequence.push_back(step_post); // b = 1
 
         Context context;
-        context.variables["a"] = VariableValue{ 5LL };
+        context.variables["a"] = VarInteger{ 5 };
 
         REQUIRE(sequence[0].is_disabled() == false);
         REQUIRE(sequence[1].is_disabled() == false);
@@ -3201,7 +3417,7 @@ TEST_CASE("execute(): disable 'invariant' (direct)", "[Sequence]")
         sequence.push_back(step_post); // b = 1
 
         Context context;
-        context.variables["a"] = VariableValue{ 5LL };
+        context.variables["a"] = VarInteger{ 5 };
 
         REQUIRE(sequence[0].is_disabled() == false);
         REQUIRE(sequence[1].is_disabled() == false);
@@ -3285,7 +3501,7 @@ TEST_CASE("execute(): disable 'invariant' (afterwards)", "[Sequence]")
     sequence.push_back(step_post); // b = 1
 
     Context context;
-    context.variables["a"] = VariableValue{ 5LL };
+    context.variables["a"] = VarInteger{ 5 };
 
     SECTION("Second step disabled")
     {
@@ -3507,14 +3723,70 @@ TEST_CASE("execute(): Disable + re-enable action inside while loop", "[Sequence]
     SECTION("Disable WHILE, then attempt to re-enable ACTION")
     {
         s.modify(s.begin(), [](Step& st) { st.set_disabled(true); });
-        REQUIRE(s[0].is_disabled() == true);
-        REQUIRE(s[1].is_disabled() == true);
-        REQUIRE(s[2].is_disabled() == true);
+        REQUIRE(s[0].is_disabled());
+        REQUIRE(s[1].is_disabled());
+        REQUIRE(s[2].is_disabled());
 
         s.modify(s.begin() + 1, [](Step& st) { st.set_disabled(false); });
-        REQUIRE(s[0].is_disabled() == true);
-        REQUIRE(s[1].is_disabled() == true);
-        REQUIRE(s[2].is_disabled() == true);
+        REQUIRE(s[0].is_disabled());
+        REQUIRE(s[1].is_disabled());
+        REQUIRE(s[2].is_disabled());
+    }
+}
+
+TEST_CASE("execute(): Single step", "[Sequence]")
+{
+    // A deliberately invalid sequence for testing single-step execution:
+    // END
+    // WHILE
+    // ACTION
+
+    Step step_end{ Step::type_end };
+    step_end.set_used_context_variable_names(VariableNames{ "a" })
+            .set_script("a = 1; error('End Boom')");
+
+    Step step_while{ Step::type_while };
+    step_while.set_used_context_variable_names(VariableNames{ "a" })
+              .set_script("a = 2; return true");
+
+    Step step_action{ Step::type_action };
+    step_action.set_used_context_variable_names(VariableNames{ "a" })
+               .set_script("a = 3; error('Action Boom')");
+
+    Sequence sequence{ "test_sequence" };
+    sequence.push_back(step_end);
+    sequence.push_back(step_while);
+    sequence.push_back(step_action);
+
+    Context context;
+    context.variables["a"] = VarInteger{ 0 };
+
+    SECTION("Index 0 (END step): Script is not executed because of the step type")
+    {
+        REQUIRE(sequence.execute(context, nullptr, 0) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == VarInteger{ 0 });
+    }
+
+    SECTION("Index 1 (WHILE step): Script is executed")
+    {
+        REQUIRE(sequence.execute(context, nullptr, 1) == gul14::nullopt);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == VarInteger{ 2 });
+    }
+
+    SECTION("Index 2 (ACTION step): Script is executed")
+    {
+        auto maybe_error = sequence.execute(context, nullptr, 2);
+        REQUIRE(maybe_error.has_value());
+        REQUIRE_THAT(maybe_error->what(), Contains("Action Boom"));
+        REQUIRE(maybe_error->get_index().has_value());
+        REQUIRE(maybe_error->get_index().value() == 2);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == VarInteger{ 3 });
+    }
+
+    SECTION("Invalid index")
+    {
+        REQUIRE_THROWS_AS(sequence.execute(context, nullptr, 3), Error);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == VarInteger{ 0 });
     }
 }
 
@@ -3545,21 +3817,21 @@ TEST_CASE("Sequence: terminate sequence with Lua exit function", "[Sequence]")
 
     step_while_end.set_label("end loop");
 
-    ctx.variables["a"] = VariableValue{ 0LL };
+    ctx.variables["a"] = VarInteger{ 0 };
 
     seq.push_back(step_while);
     seq.push_back(step_increment);
     seq.push_back(step_check_termination);
     seq.push_back(step_while_end);
 
-    seq.execute(ctx, &comm);
+    REQUIRE(seq.execute(ctx, &comm) == gul14::nullopt);
 
     // Both the sequence and all of its steps must show is_running() == false.
     REQUIRE(seq.is_running() == false);
     for (const auto& step : seq)
         REQUIRE(step.is_running() == false);
 
-    REQUIRE(std::get<long long>(ctx.variables["a"] ) == 4LL);
+    REQUIRE(std::get<VarInteger>(ctx.variables["a"]) == 4);
     REQUIRE(not queue.empty());
     REQUIRE(queue.size() == 26);
     auto msg = queue.back();
@@ -3567,4 +3839,271 @@ TEST_CASE("Sequence: terminate sequence with Lua exit function", "[Sequence]")
     REQUIRE(msg.get_text() == "Script called terminate_sequence()");
     REQUIRE(msg.get_index().has_value());
     REQUIRE(*(msg.get_index()) == 2);
+}
+
+TEST_CASE("Sequence: add step setup with variable", "[Sequence]")
+{
+    Context ctx;
+    ctx.variables["a"] = VarString{ "" };
+    ctx.variables["b"] = VarString{ "" };
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script("a = preface .. 'Bob'");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Step step_action_2{Step::type_action};
+    step_action_2.set_script("b = a .. ' and ' .. preface .. 'Marvin!'");
+    step_action_2.set_used_context_variable_names({VariableName{"a"}, VariableName{"b"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.push_back(step_action_2);
+    seq.set_step_setup_script("preface = 'Alice calls '");
+
+    REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+
+    REQUIRE(std::get<std::string>(ctx.variables["a"]) == "Alice calls Bob");
+    REQUIRE(std::get<std::string>(ctx.variables["b"]) == "Alice calls Bob and Alice"
+        " calls Marvin!");
+    REQUIRE(ctx.step_setup_script == "preface = 'Alice calls '");
+}
+
+TEST_CASE("Sequence: add step setup with function", "[Sequence]")
+{
+    Context ctx;
+    ctx.variables["a"] = VarString{ "" };
+    ctx.variables["b"] = VarString{ "" };
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script("a = preface('Bob!')");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Step step_action_2{Step::type_action};
+    step_action_2.set_script("b = preface('Charlie') .. ' and ' .. preface('Eve!')");
+    step_action_2.set_used_context_variable_names({VariableName{"b"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.push_back(step_action_2);
+    seq.set_step_setup_script("function preface(name) return 'Alice calls ' .. name end");
+
+    REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+
+    REQUIRE(std::get<std::string>(ctx.variables["a"]) == "Alice calls Bob!");
+    REQUIRE(std::get<std::string>(ctx.variables["b"]) == "Alice calls Charlie and"
+        " Alice calls Eve!");
+    REQUIRE(ctx.step_setup_script == "function preface(name) return 'Alice calls ' .. name end");
+}
+
+TEST_CASE("Sequence: add step setup with isolated function modification", "[Sequence]")
+{
+    Context ctx;
+    ctx.variables["a"] = VarString{ "" };
+    ctx.variables["b"] = VarString{ "" };
+    ctx.variables["c"] = VarString{ "" };
+    ctx.variables["d"] = VarString{ "" };
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script("a = preface('Bob!')");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Step step_action_2{Step::type_action};
+    step_action_2.set_script(
+        R"(b = preface('Charlie!')
+           function preface(name) return 'Bob calls ' .. name end
+           c = preface('Marvin!')
+        )");
+    step_action_2.set_used_context_variable_names({VariableName{"b"}, VariableName{"c"}});
+
+    Step step_action_3{Step::type_action};
+    step_action_3.set_script("d = preface('Eve!')");
+    step_action_3.set_used_context_variable_names({VariableName{"d"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.push_back(step_action_2);
+    seq.push_back(step_action_3);
+    seq.set_step_setup_script("function preface(name) return 'Alice calls ' .. name end");
+
+    REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+
+    REQUIRE(std::get<VarString>(ctx.variables["a"]) == "Alice calls Bob!");
+    REQUIRE(std::get<VarString>(ctx.variables["b"]) == "Alice calls Charlie!");
+    REQUIRE(std::get<VarString>(ctx.variables["c"]) == "Bob calls Marvin!");
+    REQUIRE(std::get<VarString>(ctx.variables["d"]) == "Alice calls Eve!");
+    REQUIRE(ctx.step_setup_script == "function preface(name) return 'Alice calls ' .. name end");
+}
+
+TEST_CASE("Sequence: Check line number on failure (setup at line 2)", "[Sequence]")
+{
+    Context ctx;
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script("a = preface .. ' and Bob'");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.set_step_setup_script(
+        R"(preface = 'Alice'
+           this line will fail
+        )");
+
+    auto maybe_error = seq.execute(ctx, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE_THAT(maybe_error->what(), Catch::Matchers::StartsWith("[setup] 2: syntax error"));
+}
+
+TEST_CASE("Sequence: Check line number on failure (script at line 2)", "[Sequence]")
+{
+    Context ctx;
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script(
+        R"(a = preface .. ' and Bob'
+           Oops this line will fail
+        )");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.set_step_setup_script("preface = 'Alice'");
+
+    auto maybe_error = seq.execute(ctx, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE_THAT(maybe_error->what(), Catch::Matchers::StartsWith("2: syntax error"));
+}
+
+TEST_CASE("Sequence: Check line number on failure (script at line 3)", "[Sequence]")
+{
+    Context ctx;
+
+    Step step_action_1{Step::type_action};
+    step_action_1.set_script(
+        R"(a = preface .. ' and Bob'
+           a = 1
+           And again this line will fail
+        )");
+    step_action_1.set_used_context_variable_names({VariableName{"a"}});
+
+    Sequence seq{ "test_sequence" };
+    seq.push_back(step_action_1);
+    seq.set_step_setup_script("preface = 'Alice'");
+
+    auto maybe_error = seq.execute(ctx, nullptr);
+    REQUIRE(maybe_error.has_value());
+    REQUIRE_THAT(maybe_error->what(), Catch::Matchers::StartsWith("3: syntax error"));
+}
+
+TEST_CASE("Sequence: Check setter/getter function for step setup script", "[Sequence]")
+{
+    const char script[] = "a = 'Alice'\nb = 'Bob'";
+
+    Sequence seq{ "test_sequence" };
+    seq.set_step_setup_script(script);
+
+    SECTION("Sequence::get_step_setup_script()")
+    {
+        REQUIRE(seq.get_step_setup_script() == script);
+    }
+
+    SECTION("Context::step_setup_script")
+    {
+        Context ctx;
+        REQUIRE(ctx.step_setup_script.empty());
+
+        REQUIRE(seq.execute(ctx, nullptr) == gul14::nullopt);
+        REQUIRE(ctx.step_setup_script == script);
+    }
+}
+
+TEST_CASE("Sequence: sequence timeout", "[Sequence]")
+{
+    Step step{Step::type_action};
+    step.set_script("sleep(1)");
+
+    Sequence seq{"test_sequence"};
+    seq.push_back(std::move(step));
+
+    seq.set_timeout(10ms);
+    REQUIRE(seq.get_timeout() == 10ms);
+
+    Context ctx;
+    REQUIRE(seq.get_time_of_last_execution() == task::TimePoint{});
+    auto maybe_error = seq.execute(ctx, nullptr);
+    REQUIRE(seq.get_time_of_last_execution() != task::TimePoint{});
+
+    REQUIRE(maybe_error.has_value());
+    REQUIRE_THAT(maybe_error->what(), Contains("Timeout: Sequence"));
+}
+
+TEST_CASE("Sequence: add maintainer", "[Sequence]")
+{
+    Sequence seq{"test_sequence"};
+
+    REQUIRE("" == seq.get_maintainers());
+
+    seq.set_maintainers("");
+    REQUIRE("" == seq.get_maintainers());
+
+    seq.set_maintainers("Jane Doe");
+    REQUIRE("Jane Doe" == seq.get_maintainers());
+
+
+    seq.set_maintainers(" \t\vJohn Doe");
+    REQUIRE("John Doe" == seq.get_maintainers());
+
+    seq.set_maintainers("John Doe        ");
+    REQUIRE("John Doe" == seq.get_maintainers());
+
+    REQUIRE_THROWS_AS(seq.set_maintainers("John\t\v\f Doe"), Error);
+    REQUIRE_THROWS_AS(seq.set_maintainers("John Doe\nJane Doe"), Error);
+    REQUIRE_THROWS_AS(seq.set_maintainers("John Doe\rJane Doe"), Error);
+    REQUIRE_THROWS_AS(seq.set_maintainers("John Doe\vJane Doe"), Error);
+}
+
+TEST_CASE("Sequence: label with control character", "[serialize_sequence]")
+{
+    REQUIRE_THROWS_AS(Sequence("A\bbell"), Error);
+
+    Sequence sequence{ "Test sequence" };
+    REQUIRE_THROWS_AS(sequence.set_label("A\bbell"), Error);
+}
+
+TEST_CASE("Sequence: sequence autorun", "[Sequence]")
+{
+    Sequence seq("test_sequence");
+
+    REQUIRE_FALSE(seq.get_autorun());
+    seq.set_autorun(true);
+    REQUIRE(seq.get_autorun());
+    seq.set_autorun(false);
+    REQUIRE_FALSE(seq.get_autorun());
+}
+
+TEST_CASE("Sequence: disable a sequence", "[Sequence]")
+{
+    Sequence seq("test_sequence");
+
+    REQUIRE_FALSE(seq.is_disabled());
+    seq.set_disabled(true);
+    REQUIRE(seq.is_disabled());
+    seq.set_disabled(false);
+    REQUIRE_FALSE(seq.is_disabled());
+}
+
+TEST_CASE("Sequence: prohibit execution of disabled sequence", "[Sequence]")
+{
+    Sequence seq("test_sequence");
+    seq.push_back(Step{Step::type_action});
+
+    Context ctx;
+
+    auto execution = seq.execute(ctx, nullptr);
+    REQUIRE_FALSE(execution.has_value());
+
+    seq.set_disabled(true);
+    auto error = seq.execute(ctx, nullptr);
+    REQUIRE(error.has_value());
+    REQUIRE(error.value() == Error("Sequence is disabled"));
 }

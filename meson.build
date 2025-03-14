@@ -22,7 +22,7 @@ pkg_config_name = 'taskolib'
 
 # Keep this version number up to date...
 sol_version = '3.3.0'
-lua_version = '5.4.3'
+lua_version = '5.4.6'
 
 
 
@@ -55,6 +55,12 @@ libno_full = '.'.join(libno_parts)
 ## https://stackoverflow.com/questions/52516165/cannot-use-the-c-stdfilesystem-library-with-meson-build
 add_project_link_arguments(['-lstdc++fs'], language : 'cpp')
 
+## libgit2 has obviously a change in the globbing
+local_compiler_args = []
+if dependency('libgit2').version().version_compare('<1')
+    message('Ancient libgit2 version detected')
+    local_compiler_args += [ '-DANCIENT_LIBGIT2' ]
+endif
 
 ## Build library
 subdir('include')
@@ -69,19 +75,20 @@ deps = [
     dependency('threads'),
     gul_dep.partial_dependency(compile_args : true, includes : true),
     lua_dep,
+    dependency('libgit4cpp', fallback : ['libgit4cpp', 'libgit4cpp_dep']),
 ]
 
 lib = both_libraries(meson.project_name(),
     sources,
-    dependencies : deps,
+    dependencies : deps + [ declare_dependency(compile_args : local_compiler_args) ],
     soversion : libno_full,
     darwin_versions : libno,
     include_directories : inc,
     build_rpath : meson.current_build_dir(),
     install_rpath : get_option('prefix') / get_option('libdir'),
     #gnu_symbol_visibility : 'hidden',
-    install : true)
-
+    install : true,
+)
 
 ## pkg-config
 
@@ -92,7 +99,7 @@ pkg.generate(lib,
     version : libno,
     filebase : pkg_config_name,
     libraries : [ '-Wl,-rpath,${libdir}' ],
-    requires : [ 'libgul14' ],
+    requires : [ 'libgul14', 'libgit4cpp' ],
     subdirs : [ '', 'taskolib' / 'sol' + sol_version, 'taskolib' / 'lua' + lua_version, ],
 )
 

@@ -4,7 +4,7 @@
  * \date   Created on May 6, 2022
  * \brief  Serialize Sequence and Steps on storage hardware.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -22,30 +22,45 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-#ifndef TASKOLIB_SERIALIZE_H_
-#define TASKOLIB_SERIALIZE_H_
+#ifndef TASKOLIB_SERIALIZE_SEQUENCE_H_
+#define TASKOLIB_SERIALIZE_SEQUENCE_H_
 
 #include <filesystem>
 #include <iostream>
-#include "taskolib/Step.h"
+
+#include <gul14/string_view.h>
+
 #include "taskolib/Sequence.h"
+#include "taskolib/Step.h"
+#include "taskolib/UniqueId.h"
 
 namespace task {
+
+/**
+ * Return a filename for the given combination of machine-friendly sequence name and
+ * unique ID.
+ *
+ * It is guaranteed that the filename does not contain filesystem-unsafe characters like
+ * / or \.
+ */
+std::string make_sequence_filename(SequenceName sequence_name, UniqueId unique_id);
 
 /**
  * Serialize parameters of Step to the output stream.
  *
  * No checking of any stream failure is done and should be performed by the caller.
  *
- * @param stream to serialize the Step
- * @param step to serialize
- * @return passed output stream
+ * \param stream to serialize the Step
+ * \param step to serialize
+ * \return passed output stream
  */
 std::ostream& operator<<(std::ostream& stream, const Step& step);
 
 /**
- * Serialize Step to the file system. It pushes the Step properties to the
- * stream:
+ * Store a Step in a file.
+ *
+ * This function saves the script of this step in a Lua file. Metadata like the step type
+ * or the label are stored as comments in the header of the file:
  *
  * \code
  * -- type: {action, if, elseif, else, while, try, catch, end}
@@ -75,40 +90,21 @@ std::ostream& operator<<(std::ostream& stream, const Step& step);
  *
  * The label is explicitly escaped on storing and unescaped on loading.
  *
- * @param step step to serialize
- * @param path for the Step
+ * \param lua_file  filename under which the step should be stored
+ * \param step  the Step object that should be serialized
  */
-void serialize_step(const std::filesystem::path& path, const Step& step);
+void store_step(const std::filesystem::path& lua_file, const Step& step);
 
 /**
- * Serialize Sequence with all of its Step 's as files.
+ * Serialize parameters of Sequence to the output stream.
  *
- * After serializing you will find the following structure:
+ * No checking of any stream failure is done and should be performed by the caller.
  *
- * - the sequence label is extracted to a folder name, where underneath all steps are
- *  serialized. If the label has one of the following characters they are escaped to
- *  hexadecimal format: /\\:?*"'<>|$&. Moreover all control characters (<= 32) are
- *  converted to space character (' ').
- *
- * - underneath the sequence folder you will find the Step 's serialized in files. To
- *  differ the Step they are enumerated. Each filename starts with `step` followed by a
- *  consecutive step enumeration number followed by type. Since you can directly evaluate
- *  the step as a Lua script it has the extension `'.lua'`. The step numbering is filled
- *  with '0' to allow alphanumerical sorting.
- *
- *  Here is one example for the first step that has type `action`: `step_001_action.lua`
- *
- *  \note Remember that the libary only uses three digit for numbering. There is no
- *  guarantee for serializing more then 1000 Step 's in alphabetical order.
- *
- * - important Step parameters are exported to the beginning of the file as Lua
- *  comments. See ::serialize_step(const std::filesystem::path&, const Step&) for more
- *  information.
- *
- * @param path to store Sequence
- * @param sequence to be serialized
+ * \param stream to serialize the Step
+ * \param sequence to serialize
+ * \return passed output stream
  */
-void serialize_sequence(const std::filesystem::path& path, const Sequence& sequence);
+std::ostream& operator<<(std::ostream& stream, const Sequence& sequence);
 
 } // namespace task
 

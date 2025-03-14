@@ -1,8 +1,8 @@
 /**
  * \file   execute_lua_script.cc
- * \author Lars Froehlich, Marcus Walla
+ * \author Lars Fröhlich, Marcus Walla
  * \date   Created on November 15, 2022
- * \brief  Implementation of execute_lua_script().
+ * \brief  Implementation of execute_lua_script() and load_lua_script().
  *
  * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
@@ -32,51 +32,65 @@
 
 namespace task {
 
-std::variant<sol::object, std::string>
+namespace {
+
+const std::string anchor = u8"\u2693";
+constexpr gul14::string_view chunk_prefix{ u8"[string \"\u2693\"]:" };
+
+std::string process_msg(gul14::string_view msg)
+{
+    // If C++ code is called by Lua and throws an exception that is not derived
+    // from std::exception, the exception is not intercepted by the Sol
+    // trampoline, but caught directly by Lua. Lua would expect this exception
+    // to come from lua_error() and therefore looks for an error message on its
+    // stack, which is not there. Depending on build type and Sol2 configuration,
+    // this can generate a stack error message or not. We try to convert this into
+    // a concise error message.
+    if (msg.empty() ||
+        msg == "lua: error: stack index 1, expected string, received function")
+    {
+        return "Unknown exception";
+    }
+
+    return gul14::replace(msg, chunk_prefix, "");
+}
+
+} // anonymous namespace
+
+gul14::expected<sol::object, std::string>
 execute_lua_script(sol::state& lua, sol::string_view script)
 {
-    const std::string anchor = u8"\u2693";
-    constexpr gul14::string_view chunk_prefix{ u8"[string \"\u2693\"]:" };
-
-    auto process_msg =
-        [chunk_prefix](gul14::string_view msg) -> std::string
-        {
-            // If C++ code is called by Lua and throws an exception that is not derived
-            // from std::exception, the exception is not intercepted by the Sol
-            // trampoline, but caught directly by Lua. Lua would expect this exception
-            // to come from lua_error() and therefore looks for an error message on its
-            // stack, which is not there. Depending on build type and Sol2 configuration,
-            // this can generate a stack error message or not. We try to convert this into
-            // a concise error message.
-            if (msg.empty() ||
-                msg == "lua: error: stack index 1, expected string, received function")
-            {
-                return "Unknown exception";
-            }
-
-            return gul14::replace(msg, chunk_prefix, "");
-        };
-
     try
     {
-        auto protected_result = lua.safe_script(script, sol::script_pass_on_error, anchor);
+        auto protected_result = lua.safe_script(
+            script, sol::script_pass_on_error, anchor);
 
         if (!protected_result.valid())
         {
             sol::error err = protected_result;
-            return process_msg(err.what());
+            return gul14::unexpected(process_msg(err.what()));
         }
 
         return static_cast<sol::object>(protected_result);
     }
     catch(const std::exception& e)
     {
-        return process_msg(e.what());
+        return gul14::unexpected(process_msg(e.what()));
     }
     catch(...)
     {
-        return std::string{ "Unknown C++ exception" };
+        return gul14::unexpected("Unknown C++ exception");
     }
+}
+
+gul14::expected<sol::load_result, std::string>
+load_lua_script(sol::state& lua, sol::string_view script)
+{
+    sol::load_result result = lua.load(script, anchor);
+    if (result.valid())
+        return result;
+
+    return gul14::unexpected(static_cast<sol::error>(result).what());
 }
 
 } // namespace task

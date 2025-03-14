@@ -1,6 +1,6 @@
 /**
  * \file   Message.h
- * \author Lars Froehlich, Marcus Walla
+ * \author Lars Fröhlich, Marcus Walla
  * \date   Created on April 1, 2022
  * \brief  Declaration of the Message class.
  *
@@ -48,9 +48,6 @@ public:
     enum class Type
     {
         output, ///< a message string that was output by a step via print()
-        log_info, ///< a log entry of informational character
-        log_warning, ///< a log entry carrying some kind of warning
-        log_error, ///< a log entry carrying an error message
         sequence_started, ///< a sequence has been started
         sequence_stopped, ///< a sequence has stopped regularly
         sequence_stopped_with_error, ///< a sequence has been stopped because of an error
@@ -61,12 +58,10 @@ public:
     };
 
 private:
-    static constexpr std::array<char const*, static_cast<int>(Type::undefined) + 1> type_description_ =
+    static constexpr std::array<char const*, static_cast<int>(Type::undefined) + 1>
+    type_description_ =
     {
         "output",
-        "log_info",
-        "log_warning",
-        "log_error",
         "sequence_started",
         "sequence_stopped",
         "sequence_stopped_with_error",

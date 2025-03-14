@@ -1,9 +1,8 @@
 # Headers to be installed under ${prefix}/include/
 public_headers = [
    'taskolib/CommChannel.h',
-   'taskolib/console.h',
    'taskolib/Context.h',
-   'taskolib/deserialize_sequence.h',
+   'taskolib/default_message_callback.h',
    'taskolib/exceptions.h',
    'taskolib/execute_lua_script.h',
    'taskolib/Executor.h',
@@ -13,11 +12,15 @@ public_headers = [
    'taskolib/Message.h',
    'taskolib/Sequence.h',
    'taskolib/SequenceManager.h',
-   'taskolib/serialize_sequence.h',
+   'taskolib/SequenceName.h',
    'taskolib/Step.h',
    'taskolib/StepIndex.h',
+   'taskolib/Tag.h',
    'taskolib/taskolib.h',
    'taskolib/time_types.h',
+   'taskolib/Timeout.h',
+   'taskolib/TimeoutTrigger.h',
+   'taskolib/UniqueId.h',
    'taskolib/VariableName.h',
 ]
 install_headers(files(public_headers),

@@ -1,6 +1,6 @@
 /**
  * \file   test_Step.cc
- * \author Lars Froehlich
+ * \author Lars Fröhlich
  * \date   Created on November 26, 2021
  * \brief  Test suite for the Step class.
  *
@@ -33,7 +33,8 @@
 
 using namespace std::literals;
 using namespace task;
-using namespace Catch::Matchers;
+using Catch::Matchers::Contains;
+using Catch::Matchers::StartsWith;
 
 TEST_CASE("Step: Failure", "[Step]")
 {
@@ -97,7 +98,7 @@ TEST_CASE("Step: get_time_of_last_modification()", "[Step]")
 TEST_CASE("Step: get_timeout()", "[Step]")
 {
     Step step;
-    REQUIRE(step.get_timeout() == Step::infinite_timeout);
+    REQUIRE(isfinite(step.get_timeout()) == false);
 
     step.set_timeout(42s);
     REQUIRE(step.get_timeout() == 42'000ms);
@@ -214,11 +215,11 @@ TEST_CASE("Step: set_timeout()", "[Step]")
     REQUIRE(&step.set_timeout(42s) == &step);
     REQUIRE(step.get_timeout() == 42s);
 
-    step.set_timeout(-2ms);
+    step.set_timeout(0ms);
     REQUIRE(step.get_timeout() == 0s);
 
-    step.set_timeout(Step::infinite_timeout);
-    REQUIRE(step.get_timeout() == Step::infinite_timeout);
+    step.set_timeout(Timeout::infinity());
+    REQUIRE(isfinite(step.get_timeout()) == false);
 }
 
 TEST_CASE("Step: set_type()", "[Step]")
@@ -285,7 +286,7 @@ TEST_CASE("execute(): Return value handling in scripts requiring a bool result",
         Step step{ type };
 
         SECTION("Empty step throws") {
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return true' returns true") {
@@ -300,32 +301,32 @@ TEST_CASE("execute(): Return value handling in scripts requiring a bool result",
 
         SECTION("'return nil' throws") {
             step.set_script("return nil");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 42' throws") {
             step.set_script("return 42");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 0' throws") {
             step.set_script("return 0");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 0.1' throws") {
             step.set_script("return 0.1");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 0.0' throws") {
             step.set_script("return 0.0");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("\"return 'false'\" throws") {
             step.set_script("return 'false'");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
     }
 }
@@ -353,27 +354,27 @@ TEST_CASE("execute(): Return value handling in scripts requiring no result", "[S
 
         SECTION("'return true' throws") {
             step.set_script("return true");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return false' throws") {
             step.set_script("return false");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 0' throws") {
             step.set_script("return 0");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("'return 0.0' throws") {
             step.set_script("return 0.0");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
 
         SECTION("\"return 'black cow'\" throws") {
             step.set_script("return 'black cow'");
-            REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
+            REQUIRE_THROWS_AS(step.execute(context), Error);
         }
     }
 }
@@ -385,8 +386,22 @@ TEST_CASE("execute(): Lua exceptions", "[Step]")
 
     SECTION("Syntax error")
     {
-        step.set_script("not a lua program");
-        REQUIRE_THROWS_AS(step.execute(context), Error);
+        step.set_script("This is not a Lua program.");
+        try
+        {
+            step.execute(context, nullptr, 42);
+            FAIL("Step::execute(): No exception thrown for invalid Lua code");
+        }
+        catch (const Error& e)
+        {
+            REQUIRE_THAT(e.what(), Contains("syntax error"));
+            REQUIRE(e.get_index().has_value());
+            REQUIRE(e.get_index().value() == 42);
+        }
+        catch (...)
+        {
+            FAIL("Wrong exception type thrown by Step::execute()");
+        }
     }
 
     SECTION("Runtime error")
@@ -395,14 +410,19 @@ TEST_CASE("execute(): Lua exceptions", "[Step]")
         try
         {
             step.execute(context); // Must throw
-            FAIL("No exception thrown by Lua error()");
+            FAIL("Step::execute(): No exception thrown by Lua error()");
         }
-        catch(const Error& e)
+        catch (const Error& e)
         {
             REQUIRE_THAT(e.what(), StartsWith("pippo"));
             // Lua adds a stack trace after this output. This is a somewhat brittle test,
             // but since we have control over our Lua version, we are sure to spot it if
             // the output format changes.
+            REQUIRE(e.get_index().has_value() == false);
+        }
+        catch (...)
+        {
+            FAIL("Wrong exception type thrown by Step::execute()");
         }
     }
 
@@ -420,8 +440,8 @@ TEST_CASE("execute(): C++ exceptions", "[Step]")
     Step step;
     step.set_used_context_variable_names(VariableNames{ "a" });
 
-    context.variables["a"] = 0LL;
-    context.lua_init_function =
+    context.variables["a"] = VarInteger{ 0 };
+    context.step_setup_function =
         [](sol::state& sol)
         {
             sol["throw_logic_error"] = []() { throw std::logic_error("unlogisch"); };
@@ -433,17 +453,17 @@ TEST_CASE("execute(): C++ exceptions", "[Step]")
         step.set_script("throw_logic_error(); a = 42");
 
         // Like a genuine Lua exception, a C++ exception must be reported as a
-        // task::ErrorAtIndex.
-        REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
-        REQUIRE(std::get<long long>(context.variables["a"]) == 0);
+        // task::Error.
+        REQUIRE_THROWS_AS(step.execute(context), Error);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 0);
     }
 
     SECTION("Nonstandard C++ exception thrown at script runtime")
     {
         step.set_script("throw_weird_exception(); a = 42");
 
-        REQUIRE_THROWS_AS(step.execute(context), ErrorAtIndex);
-        REQUIRE(std::get<long long>(context.variables["a"]) == 0);
+        REQUIRE_THROWS_AS(step.execute(context), Error);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 0);
     }
 
     SECTION("C++ exceptions are converted to Lua errors and caught by pcall()")
@@ -451,7 +471,7 @@ TEST_CASE("execute(): C++ exceptions", "[Step]")
         step.set_script("pcall(throw_logic_error); a = 42");
 
         REQUIRE_NOTHROW(step.execute(context));
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42LL);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
     }
 }
 
@@ -544,12 +564,12 @@ TEST_CASE("execute(): Timeout", "[Step]")
 TEST_CASE("execute(): Immediate termination", "[Step]")
 {
     Context context;
-    context.variables["a"] = 0LL;
+    context.variables["a"] = VarInteger{ 0 };
 
     Step step;
     CommChannel comm;
 
-    context.lua_init_function =
+    context.step_setup_function =
         [&comm](sol::state& sol)
         {
             sol["request_termination"] =
@@ -567,7 +587,7 @@ TEST_CASE("execute(): Immediate termination", "[Step]")
 
     REQUIRE_THROWS_AS(step.execute(context, &comm, 0), Error);
     REQUIRE(comm.immediate_termination_requested_);
-    REQUIRE(std::get<long long>(context.variables["a"]) == -1LL);
+    REQUIRE(std::get<VarInteger>(context.variables["a"]) == -1);
 }
 
 TEST_CASE("execute(): Setting 'last executed' timestamp", "[Step]")
@@ -590,7 +610,7 @@ TEST_CASE("execute(): Importing variables from a context", "[Step]")
 
     SECTION("Importing nothing")
     {
-        context.variables["a"] = VariableValue{ 42LL };
+        context.variables["a"] = VarInteger{ 42 };
         step.set_script("return a == 42");
         REQUIRE(step.execute(context) == false);
     }
@@ -604,15 +624,15 @@ TEST_CASE("execute(): Importing variables from a context", "[Step]")
 
     SECTION("Importing an integer")
     {
-        context.variables["a"] = VariableValue{ 42LL };
+        context.variables["a"] = VarInteger{ 42 };
         step.set_used_context_variable_names(VariableNames{ "b", "a" });
         step.set_script("return a == 42");
         REQUIRE(step.execute(context) == true);
     }
 
-    SECTION("Importing a double")
+    SECTION("Importing a floating point number")
     {
-        context.variables["a"] = VariableValue{ 1.5 };
+        context.variables["a"] = VarFloat{ 1.5 };
         step.set_used_context_variable_names(VariableNames{ "b", "a" });
         step.set_script("return a == 1.5");
         REQUIRE(step.execute(context) == true);
@@ -620,7 +640,7 @@ TEST_CASE("execute(): Importing variables from a context", "[Step]")
 
     SECTION("Importing a string")
     {
-        context.variables["a"] = VariableValue{ "Hello\0world"s };
+        context.variables["a"] = VarString{ "Hello\0world"s };
         step.set_used_context_variable_names(VariableNames{ "b", "a" });
         step.set_script("return a == 'Hello\\0world'");
         REQUIRE(step.execute(context) == true);
@@ -632,14 +652,14 @@ TEST_CASE("execute(): Exporting variables into a context", "[Step]")
     Context context;
     Step step;
 
-    step.set_script("a = 42; b = 1.5; c = 'string'; d = ipairs");
+    step.set_script("a = 42; b = 1.5; c = 'string'; d = ipairs; e = (2 == 1 + 1)");
 
     SECTION("No exported variables")
     {
-        context.variables["b"] = "Test"s;
+        context.variables["b"] = VarString{ "Test" };
         step.execute(context);
         REQUIRE(context.variables.size() == 1);
-        REQUIRE(std::get<std::string>(context.variables["b"]) == "Test");
+        REQUIRE(std::get<VarString>(context.variables["b"]) == "Test");
     }
 
     SECTION("Exporting an integer")
@@ -647,22 +667,25 @@ TEST_CASE("execute(): Exporting variables into a context", "[Step]")
         step.set_used_context_variable_names(VariableNames{ "a" });
         step.execute(context);
         REQUIRE(context.variables.size() == 1);
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42);
-        REQUIRE_THROWS_AS(std::get<double>(context.variables["a"]),
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
+        REQUIRE_THROWS_AS(std::get<VarFloat>(context.variables["a"]),
                           std::bad_variant_access);
-        REQUIRE_THROWS_AS(std::get<std::string>(context.variables["a"]),
+        REQUIRE_THROWS_AS(std::get<VarString>(context.variables["a"]),
+                          std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarBool>(context.variables["a"]),
                           std::bad_variant_access);
     }
 
-    SECTION("Exporting a double")
+    SECTION("Exporting a floating-point value")
     {
         step.set_used_context_variable_names(VariableNames{ "b" });
         step.execute(context);
         REQUIRE(context.variables.size() == 1);
 
-        REQUIRE_THROWS_AS(std::get<long long>(context.variables["b"]), std::bad_variant_access);
-        REQUIRE(std::get<double>(context.variables["b"]) == 1.5);
-        REQUIRE_THROWS_AS(std::get<std::string>(context.variables["b"]), std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarInteger>(context.variables["b"]), std::bad_variant_access);
+        REQUIRE(std::get<VarFloat>(context.variables["b"]) == 1.5);
+        REQUIRE_THROWS_AS(std::get<VarString>(context.variables["b"]), std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarBool>(context.variables["b"]), std::bad_variant_access);
     }
 
     SECTION("Exporting a string")
@@ -670,26 +693,40 @@ TEST_CASE("execute(): Exporting variables into a context", "[Step]")
         step.set_used_context_variable_names(VariableNames{ "c" });
         step.execute(context);
         REQUIRE(context.variables.size() == 1);
-        REQUIRE_THROWS_AS(std::get<long long>(context.variables["c"]), std::bad_variant_access);
-        REQUIRE_THROWS_AS(std::get<double>(context.variables["c"]), std::bad_variant_access);
-        REQUIRE(std::get<std::string>(context.variables["c"]) == "string");
+        REQUIRE_THROWS_AS(std::get<VarInteger>(context.variables["c"]), std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarFloat>(context.variables["c"]), std::bad_variant_access);
+        REQUIRE(std::get<VarString>(context.variables["c"]) == "string");
+        REQUIRE_THROWS_AS(std::get<VarBool>(context.variables["c"]), std::bad_variant_access);
+    }
+
+    SECTION("Exporting a boolean")
+    {
+        step.set_used_context_variable_names(VariableNames{ "e" });
+        step.execute(context);
+        REQUIRE(context.variables.size() == 1);
+        REQUIRE_THROWS_AS(std::get<VarInteger>(context.variables["e"]), std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarFloat>(context.variables["e"]), std::bad_variant_access);
+        REQUIRE_THROWS_AS(std::get<VarString>(context.variables["e"]), std::bad_variant_access);
+        REQUIRE(std::get<VarBool>(context.variables["e"]) == true);
     }
 
     SECTION("Exporting multiple variables")
     {
-        step.set_used_context_variable_names(VariableNames{ "c", "a", "b" });
+        step.set_used_context_variable_names(VariableNames{ "c", "a", "b", "e" });
         step.execute(context);
-        REQUIRE(context.variables.size() == 3);
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42);
-        REQUIRE(std::get<double>(context.variables["b"]) == 1.5);
-        REQUIRE(std::get<std::string>(context.variables["c"]) == "string");
+        REQUIRE(context.variables.size() == 4);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
+        REQUIRE(std::get<VarFloat>(context.variables["b"]) == 1.5);
+        REQUIRE(std::get<VarString>(context.variables["c"]) == "string");
+        REQUIRE(std::get<VarBool>(context.variables["e"]) == true);
     }
 
     SECTION("Exporting unknown types")
     {
         step.set_used_context_variable_names(VariableNames{ "d" });
-        step.execute(context);
-        REQUIRE(context.variables.size() == 0); // d is of type function and does not get exported
+
+        // d is a Lua function and cannot be exported
+        REQUIRE_THROWS_AS(step.execute(context), Error);
     }
 
     SECTION("Exporting undefined variables")
@@ -725,36 +762,36 @@ TEST_CASE("execute(): Running a step with multiple import and exports", "[Step]"
 
     SECTION("num_repetitions < 0 returns false")
     {
-        context.variables["str"] = "Test"s;
-        context.variables["num_repetitions"] = -1LL;
+        context.variables["str"] = VarString{ "Test" };
+        context.variables["num_repetitions"] = VarInteger{ -1 };
         REQUIRE(step.execute(context) == false);
         REQUIRE(context.variables.size() == 2);
-        REQUIRE(std::get<std::string>(context.variables["str"]) == "Test");
-        REQUIRE(std::get<long long>(context.variables["num_repetitions"]) == -1LL);
+        REQUIRE(std::get<VarString>(context.variables["str"]) == "Test");
+        REQUIRE(std::get<VarInteger>(context.variables["num_repetitions"]) == -1);
     }
 
     SECTION("num_repetitions == 0 returns empty string")
     {
-        context.variables["str"] = "Test"s;
-        context.variables["num_repetitions"] = 0LL;
+        context.variables["str"] = VarString{ "Test" };
+        context.variables["num_repetitions"] = VarInteger{ 0 };
         REQUIRE(step.execute(context) == true);
         REQUIRE(context.variables.size() == 3);
-        REQUIRE(std::get<std::string>(context.variables["str"]) == "Test");
-        REQUIRE(std::get<long long>(context.variables["num_repetitions"]) == 0LL);
-        REQUIRE(std::get<std::string>(context.variables["result"]) == "");
+        REQUIRE(std::get<VarString>(context.variables["str"]) == "Test");
+        REQUIRE(std::get<VarInteger>(context.variables["num_repetitions"]) == 0);
+        REQUIRE(std::get<VarString>(context.variables["result"]) == "");
     }
 
     SECTION("num_repetitions == 2 with separator")
     {
-        context.variables["str"] = "Test"s;
-        context.variables["num_repetitions"] = 2LL;
-        context.variables["separator"] = "|"s;
+        context.variables["str"] = VarString{ "Test" };
+        context.variables["num_repetitions"] = VarInteger{ 2 };
+        context.variables["separator"] = VarString{ "|" };
         REQUIRE(step.execute(context) == true);
         REQUIRE(context.variables.size() == 4);
-        REQUIRE(std::get<std::string>(context.variables["str"]) == "Test");
-        REQUIRE(std::get<long long>(context.variables["num_repetitions"]) == 2LL);
-        REQUIRE(std::get<std::string>(context.variables["separator"]) == "|");
-        REQUIRE(std::get<std::string>(context.variables["result"]) == "Test|Test");
+        REQUIRE(std::get<VarString>(context.variables["str"]) == "Test");
+        REQUIRE(std::get<VarInteger>(context.variables["num_repetitions"]) == 2);
+        REQUIRE(std::get<VarString>(context.variables["separator"]) == "|");
+        REQUIRE(std::get<VarString>(context.variables["result"]) == "Test|Test");
     }
 }
 
@@ -770,10 +807,22 @@ TEST_CASE("execute(): External commands on Lua scripts", "[Step]")
     }
 }
 
-TEST_CASE("execute(): LUA initialization function", "[Step]")
+TEST_CASE("execute(): Use some functions from os library", "[Step]")
 {
     Context context;
-    context.variables["a"] = 41LL;
+    Step step;
+    step.set_used_context_variable_names(VariableNames{ "a" });
+
+    step.set_script("a = os.date()");
+    REQUIRE_NOTHROW(step.execute(context));
+    INFO(std::get<VarString>(context.variables["a"]));
+    // To check output insert this: REQUIRE(1 == 0);
+}
+
+TEST_CASE("execute(): Lua initialization function", "[Step]")
+{
+    Context context;
+    context.variables["a"] = VarInteger{ 41 };
 
     Step step;
     step.set_used_context_variable_names(VariableNames{ "a", "b" });
@@ -781,30 +830,30 @@ TEST_CASE("execute(): LUA initialization function", "[Step]")
 
     SECTION("Missing init function does not throw")
     {
-        context.lua_init_function = nullptr;
+        context.step_setup_function = nullptr;
         REQUIRE_NOTHROW(step.execute(context));
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42LL);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
     }
 
     SECTION("Init function injecting a variable")
     {
-        context.lua_init_function = [](sol::state& s) { s["b"] = 13; };
+        context.step_setup_function = [](sol::state& s) { s["b"] = VarInteger{ 13 }; };
         REQUIRE_NOTHROW(step.execute(context));
-        REQUIRE(std::get<long long>(context.variables["b"]) == 13LL);
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42LL);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 13);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
     }
 
     SECTION("Init function injecting a function")
     {
-        context.lua_init_function =
+        context.step_setup_function =
             [](sol::state& s)
             {
-                s["f"] = [](long long n) { return n + 1LL; };
+                s["f"] = [](VarInteger n) { return n + 1; };
             };
         step.set_script("b = f(12); a = a + 1");
         REQUIRE_NOTHROW(step.execute(context));
-        REQUIRE(std::get<long long>(context.variables["a"]) == 42LL);
-        REQUIRE(std::get<long long>(context.variables["b"]) == 13LL);
+        REQUIRE(std::get<VarInteger>(context.variables["a"]) == 42);
+        REQUIRE(std::get<VarInteger>(context.variables["b"]) == 13);
     }
 }
 
@@ -814,7 +863,7 @@ TEST_CASE("execute(): Messages", "[Step]")
     CommChannel comm;
 
     Context context;
-    context.variables["a"] = 0LL;
+    context.variables["a"] = VarInteger{ 0 };
 
     Step step;
     step.set_used_context_variable_names(VariableNames{ "a" });
@@ -850,10 +899,11 @@ TEST_CASE("execute(): print function", "[Step]")
     std::string output;
 
     Context context;
-    context.print_function =
-        [&output](const std::string& str, OptionalStepIndex, CommChannel*)
+    context.message_callback_function =
+        [&output](const Message& msg)
         {
-            output += str;
+            if (msg.get_type() == Message::Type::output)
+                output += msg.get_text();
         };
 
     Step step;
@@ -901,6 +951,19 @@ TEST_CASE("Step: set_disabled()", "[Step]")
 //
 // Unit tests for free functions
 //
+
+TEST_CASE("Step: executes_script()", "[Step]")
+{
+    REQUIRE(task::executes_script(Step::type_while));
+    REQUIRE(task::executes_script(Step::type_if));
+    REQUIRE(task::executes_script(Step::type_elseif));
+    REQUIRE(task::executes_script(Step::type_action));
+
+    REQUIRE_FALSE(task::executes_script(Step::type_else));
+    REQUIRE_FALSE(task::executes_script(Step::type_try));
+    REQUIRE_FALSE(task::executes_script(Step::type_catch));
+    REQUIRE_FALSE(task::executes_script(Step::type_end));
+}
 
 TEST_CASE("to_string(Step::Type)", "[Step]")
 {

@@ -1,10 +1,10 @@
 /**
- * \file   Sequence.cc
- * \author Marcus Walla, Lars Froehlich
- * \date   Created on February 8, 2022
- * \brief  A sequence of Steps.
+ * \file    Sequence.cc
+ * \authors Marcus Walla, Lars Fröhlich
+ * \date    Created on February 8, 2022
+ * \brief   A sequence of Steps.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2024 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -29,9 +29,13 @@
 #include <gul14/trim.h>
 
 #include "internals.h"
+#include "lua_details.h"
+#include "send_message.h"
+#include "serialize_sequence.h"
 #include "taskolib/exceptions.h"
 #include "taskolib/Sequence.h"
 #include "taskolib/Step.h"
+#include "taskolib/time_types.h"
 
 using gul14::cat;
 
@@ -60,7 +64,9 @@ find_end_of_indented_block(IteratorT begin, IteratorT end, short min_indentation
 } // anonymous namespace
 
 
-Sequence::Sequence(gul14::string_view label)
+Sequence::Sequence(gul14::string_view label, SequenceName name, UniqueId uid)
+    : unique_id_{ uid }
+    , name_{ std::move(name) }
 {
     set_label(label);
 }
@@ -212,6 +218,19 @@ Sequence::ConstIterator Sequence::check_syntax_for_while(Sequence::ConstIterator
     return block_end + 1;
 }
 
+void Sequence::correct_error_index(
+    std::function<OptionalStepIndex(StepIndex err_idx)> get_new_index)
+{
+    if (not error_.has_value())
+        return;
+
+    auto maybe_error_idx = error_->get_index();
+    if (not maybe_error_idx.has_value())
+        return;
+
+    error_ = Error(error_.value().what(), get_new_index(*maybe_error_idx));
+}
+
 void Sequence::enforce_consistency_of_disabled_flags() noexcept
 {
     auto step = steps_.begin();
@@ -269,77 +288,147 @@ Sequence::ConstIterator Sequence::erase(Sequence::ConstIterator iter)
 {
     throw_if_running();
     auto return_iter = steps_.erase(iter);
+
+    correct_error_index(
+        [erased_idx = return_iter - cbegin()](StepIndex error_idx) -> OptionalStepIndex
+        {
+            if (erased_idx == error_idx)
+                return gul14::nullopt;
+            else if (erased_idx < error_idx)
+                return error_idx - 1;
+            else
+                return error_idx;
+        });
+
     enforce_invariants();
     return return_iter;
 }
 
-Sequence::ConstIterator Sequence::erase(Sequence::ConstIterator first
-    , Sequence::ConstIterator last)
+Sequence::ConstIterator Sequence::erase(Sequence::ConstIterator begin,
+                                        Sequence::ConstIterator end)
 {
+    const auto erased_begin_idx = begin - cbegin();
+    const auto erased_end_idx = end - cbegin();
+
     throw_if_running();
-    auto return_iter = steps_.erase(first, last);
+
+    if (begin > end)
+        throw Error("Invalid range: begin > end");
+
+    auto return_iter = steps_.erase(begin, end);
+
+    correct_error_index(
+        [erased_begin_idx, erased_end_idx](StepIndex error_idx) -> OptionalStepIndex
+        {
+            if (error_idx >= erased_begin_idx && error_idx < erased_end_idx)
+                return gul14::nullopt;
+            else if (error_idx >= erased_end_idx)
+                return error_idx - (erased_end_idx - erased_begin_idx);
+            else
+                return error_idx;
+        });
+
     enforce_invariants();
     return return_iter;
 }
 
-void Sequence::execute(Context& context, CommChannel* comm)
+gul14::optional<Error>
+Sequence::execute(Context& context, CommChannel* comm_channel,
+                  OptionalStepIndex opt_step_index)
+{
+    if (opt_step_index) // single-step execution
+    {
+        const auto step_index = *opt_step_index;
+        const auto step_it = steps_.begin() + step_index;
+
+        if (step_index >= size())
+            throw Error(cat("Invalid step index ", step_index));
+
+        return handle_execution(context, comm_channel,
+            cat("Single-step execution (", to_string(step_it->get_type()), " \"",
+                step_it->get_label(), "\")"),
+            [this, step_index, step_it](Context& context, CommChannel* comm)
+            {
+                if (executes_script(step_it->get_type()))
+                    step_it->execute(context, comm, step_index, &timeout_trigger_);
+            });
+    }
+
+    // full sequence execution
+    return handle_execution(context, comm_channel, "Sequence",
+        [this](Context& context, CommChannel* comm)
+        {
+            check_syntax();
+            timeout_trigger_.reset();
+            execute_range(steps_.begin(), steps_.end(), context, comm);
+        });
+}
+
+std::filesystem::path Sequence::get_folder() const
+{
+    return make_sequence_filename(get_name(), get_unique_id());
+}
+
+gul14::optional<Error>
+Sequence::handle_execution(Context& context, CommChannel* comm,
+                           gul14::string_view exec_block_name,
+                           std::function<void(Context&, CommChannel*)> runner)
 {
     const auto clear_is_running_at_function_exit =
         gul14::finally([this]{ is_running_ = false; });
 
     is_running_ = true;
 
-    send_message(comm, Message::Type::sequence_started, "Sequence started",
-                Clock::now(), 0);
+    context.step_setup_script = step_setup_script_;
 
-    bool exception_thrown = false;
-    std::string exception_message;
-    OptionalStepIndex maybe_exception_index;
+    send_message(Message::Type::sequence_started, cat(exec_block_name, " started"),
+                 Clock::now(), gul14::nullopt, context, comm);
+
+    gul14::optional<Error> maybe_error;
 
     try
     {
-        check_syntax();
-        execute_sequence_impl(steps_.begin(), steps_.end(), context, comm);
+        throw_if_disabled();
+        runner(context, comm);
     }
-    catch (const ErrorAtIndex& e)
+    catch (const Error& e)
     {
-        exception_thrown = true;
-        exception_message = e.what();
-        maybe_exception_index = e.get_index();
+        maybe_error = e;
     }
     catch (const std::exception& e)
     {
-        exception_thrown = true;
-        exception_message = e.what();
+        maybe_error = Error{ e.what() };
     }
 
-    if (exception_thrown)
+    if (maybe_error)
     {
-        auto [msg, cause] = remove_abort_markers(exception_message);
+        auto [msg, cause] = remove_abort_markers(maybe_error->what());
 
         switch (cause)
         {
         case ErrorCause::terminated_by_script:
-            send_message(comm, Message::Type::sequence_stopped, msg, Clock::now(),
-                         maybe_exception_index);
-            return; // silently return to the caller
+            send_message(Message::Type::sequence_stopped, msg, Clock::now(),
+                         maybe_error->get_index(), context, comm);
+            return gul14::nullopt; // silently return to the caller
         case ErrorCause::aborted:
-            msg = "Sequence aborted: " + msg;
+            msg = cat(exec_block_name, " aborted: ", msg);
             break;
         case ErrorCause::uncaught_error:
-            msg = "Sequence stopped with error: " + msg;
+            msg = cat(exec_block_name, " stopped with error: ", msg);
             break;
         }
 
-        send_message(comm, Message::Type::sequence_stopped_with_error, msg, Clock::now(),
-                     maybe_exception_index);
-        set_error_message(msg);
-
-        throw Error(msg);
+        send_message(Message::Type::sequence_stopped_with_error, msg, Clock::now(),
+                     maybe_error->get_index(), context, comm);
+    }
+    else
+    {
+        send_message(Message::Type::sequence_stopped, cat(exec_block_name, " finished"),
+                     Clock::now(), gul14::nullopt, context, comm);
     }
 
-    send_message(comm, Message::Type::sequence_stopped, "Sequence finished", Clock::now(),
-                 gul14::nullopt);
+    set_error(maybe_error);
+    return maybe_error;
 }
 
 Sequence::Iterator
@@ -349,7 +438,7 @@ Sequence::execute_else_block(Iterator begin, Iterator end, Context& context,
     const auto block_end = find_end_of_indented_block(
         begin + 1, end, begin->get_indentation_level() + 1);
 
-    execute_sequence_impl(begin + 1, block_end, context, comm);
+    execute_range(begin + 1, block_end, context, comm);
 
     return block_end;
 }
@@ -361,9 +450,9 @@ Sequence::execute_if_or_elseif_block(Iterator begin, Iterator end, Context& cont
     const auto block_end = find_end_of_indented_block(
         begin + 1, end, begin->get_indentation_level() + 1);
 
-    if (begin->execute(context, comm, begin - steps_.begin()))
+    if (begin->execute(context, comm, begin - steps_.begin(), &timeout_trigger_))
     {
-        execute_sequence_impl(begin + 1, block_end, context, comm);
+        execute_range(begin + 1, block_end, context, comm);
 
         // Skip forward past the END
         auto end_it = std::find_if(block_end, end,
@@ -381,8 +470,8 @@ Sequence::execute_if_or_elseif_block(Iterator begin, Iterator end, Context& cont
 }
 
 Sequence::Iterator
-Sequence::execute_sequence_impl(Iterator step_begin, Iterator step_end, Context& context,
-                                CommChannel* comm)
+Sequence::execute_range(Iterator step_begin, Iterator step_end, Context& context,
+                        CommChannel* comm)
 {
     Iterator step = step_begin;
 
@@ -392,6 +481,12 @@ Sequence::execute_sequence_impl(Iterator step_begin, Iterator step_end, Context&
         {
             ++step;
             continue;
+        }
+
+        if (comm and comm->immediate_termination_requested_)
+        {
+            throw Error{ gul14::cat(abort_marker, "Stop on user request"),
+                         static_cast<StepIndex>(step - steps_.begin()) };
         }
 
         switch (step->get_type())
@@ -418,7 +513,7 @@ Sequence::execute_sequence_impl(Iterator step_begin, Iterator step_end, Context&
                 break;
 
             case Step::type_action:
-                step->execute(context, comm, step - steps_.begin());
+                step->execute(context, comm, step - steps_.begin(), &timeout_trigger_);
                 ++step;
                 break;
 
@@ -445,7 +540,7 @@ Sequence::execute_try_block(Iterator begin, Iterator end, Context& context,
 
     try
     {
-        execute_sequence_impl(begin + 1, it_catch, context, comm);
+        execute_range(begin + 1, it_catch, context, comm);
     }
     catch (const Error& e)
     {
@@ -454,7 +549,7 @@ Sequence::execute_try_block(Iterator begin, Iterator end, Context& context,
         if (gul14::contains(e.what(), abort_marker))
             throw;
 
-        execute_sequence_impl(it_catch + 1, it_catch_block_end, context, comm);
+        execute_range(it_catch + 1, it_catch_block_end, context, comm);
     }
 
     return it_catch_block_end;
@@ -467,8 +562,8 @@ Sequence::execute_while_block(Iterator begin, Iterator end, Context& context,
     const auto block_end = find_end_of_indented_block(
         begin + 1, end, begin->get_indentation_level() + 1);
 
-    while (begin->execute(context, comm, begin - steps_.begin()))
-        execute_sequence_impl(begin + 1, block_end, context, comm);
+    while (begin->execute(context, comm, begin - steps_.begin(), &timeout_trigger_))
+        execute_range(begin + 1, block_end, context, comm);
 
     return block_end + 1;
 }
@@ -581,31 +676,21 @@ void Sequence::indent()
     }
 }
 
-Sequence::ConstIterator Sequence::insert(Sequence::ConstIterator iter, const Step& step)
-{
-    throw_if_running();
-    throw_if_full();
-
-    auto return_iter = steps_.insert(iter, step);
-    enforce_invariants();
-    return return_iter;
-}
-
-Sequence::ConstIterator Sequence::insert(Sequence::ConstIterator iter, Step&& step)
-{
-    throw_if_running();
-    throw_if_full();
-
-    auto return_iter = steps_.insert(iter, std::move(step));
-    enforce_invariants();
-    return return_iter;
-}
-
 void Sequence::pop_back()
 {
     throw_if_running();
     if (not steps_.empty())
+    {
+        correct_error_index(
+            [erased_idx = size() - 1](StepIndex error_idx) -> OptionalStepIndex
+            {
+                if (erased_idx == error_idx)
+                    return gul14::nullopt;
+                else
+                    return error_idx;
+            });
         steps_.pop_back();
+    }
     enforce_invariants();
 }
 
@@ -625,25 +710,61 @@ void Sequence::push_back(Step&& step)
     enforce_invariants();
 }
 
-void Sequence::set_error_message(gul14::string_view msg)
+void Sequence::set_error(gul14::optional<Error> opt_error)
 {
-    error_message_.assign(msg.data(), msg.size());
+    error_ = std::move(opt_error);
 }
 
 void Sequence::set_label(gul14::string_view label)
 {
     label = gul14::trim_sv(label);
 
-    if (label.empty())
-        throw Error("Sequence label may not be empty");
+    check_for_control_characters(label);
 
     if (label.size() > max_label_length)
     {
-        throw Error(cat("Label \"", label, "\" is too long (>", max_label_length,
-                        " bytes)"));
+        throw Error(cat("Label \"", label, "\" is too long (", label.size(), " bytes > ",
+            max_label_length, " bytes)"));
     }
 
     label_.assign(label.begin(), label.end());
+}
+
+void Sequence::set_maintainers(gul14::string_view maintainers)
+{
+    maintainers = gul14::trim_sv(maintainers);
+
+    check_for_control_characters(maintainers);
+
+    maintainers_.assign(maintainers.begin(), maintainers.end());
+}
+
+void Sequence::set_step_setup_script(gul14::string_view step_setup_script)
+{
+    throw_if_running();
+
+    // remove trailing whitespaces
+    step_setup_script = gul14::trim_right_sv(step_setup_script);
+
+    step_setup_script_.assign(step_setup_script.data(), step_setup_script.size());
+}
+
+void Sequence::set_tags(const std::vector<Tag>& new_tags)
+{
+    auto tags = new_tags;
+    std::sort(tags.begin(), tags.end());
+    tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+    tags_ = std::move(tags);
+}
+
+void Sequence::set_autorun(bool autorun)
+{
+    autorun_ = autorun;
+}
+
+void Sequence::set_disabled(bool is_disabled)
+{
+    is_disabled_ = is_disabled;
 }
 
 void Sequence::throw_if_full() const
@@ -656,6 +777,12 @@ void Sequence::throw_if_running() const
 {
     if (is_running_)
         throw Error("Cannot change a running sequence");
+}
+
+void Sequence::throw_if_disabled() const
+{
+    if (is_disabled_)
+        throw Error("Sequence is disabled");
 }
 
 void Sequence::throw_syntax_error_for_step(Sequence::ConstIterator /*it*/,

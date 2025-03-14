@@ -1,10 +1,10 @@
 /**
- * \file   deserialize_sequence.cc
- * \author Marcus Walla
- * \date   Created on May 24, 2022
- * \brief  Deserialize Sequence and Steps from storage hardware.
+ * \file    deserialize_sequence.cc
+ * \authors Marcus Walla, Lars Fröhlich
+ * \date    Created on May 24, 2022
+ * \brief   Deserialize Sequence and Steps from storage hardware.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2024 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -22,77 +22,31 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-#include <chrono>
-#include <fstream>
-#include <vector>
-#include <string>
-#include <sstream>
+#include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <ctime>
+#include <fstream>
 #include <set>
+#include <sstream>
+#include <string>
+#include <vector>
+
 #include <gul14/gul.h>
+
+#include "deserialize_sequence.h"
+#include "internals.h"
 #include "taskolib/hash_string.h"
-#include "taskolib/deserialize_sequence.h"
+
+using gul14::cat;
+using gul14::escape;
 
 namespace task {
 
 namespace {
 
-/// Extracted from High Level Controls Utility Library (DESY), file string_util.h/cc
-int hex2dec(const char c)
-{
-    static constexpr gul14::string_view table { "0123456789abcdef" };
-    auto pos = table.find(c);
-    if (pos == table.npos)
-        return -1;
-    else
-        return static_cast<int>(pos);
-}
-
-/// Extracted from High Level Controls Utility Library (DESY), file string_util.h/cc
-// str must be at least 2 chars long; returns negative if conversion failed.
-int hex2dec_2chars(gul14::string_view str)
-{
-    const int a = hex2dec(str[0]);
-    const int b = hex2dec(str[1]);
-    if (a < 0 or b < 0)
-        return -1;
-    return (a << 4) | b;
-}
-
-/// Extracted from High Level Controls Utility Library (DESY), file string_util.h/cc
-std::string unescape_filename_characters(gul14::string_view str)
-{
-    std::string out;
-    out.reserve(str.size());
-
-    for (size_t i = 0; i < str.size(); ++i)
-    {
-        const char c = str[i];
-        if (c != '$' or (i + 2) >= str.size())
-        {
-            out.push_back(c);
-            continue;
-        }
-
-        // Decode $ sequence
-        int val = hex2dec_2chars(str.substr(i+1, 2));
-        if (val < 32)
-        {
-            out.push_back('$');
-        }
-        else
-        {
-            out.push_back(val);
-            i += 2;
-        }
-    }
-
-    return out;
-}
-
 /**
- * Separate a comment line from a LUA script into a keyword and a remainder.
+ * Separate a comment line from a Lua script into a keyword and a remainder.
  *
  * "-- label: Hello" -> ["label", " Hello"]
  * "   -- label:Pippo " -> ["label", "Pippo "]
@@ -140,7 +94,7 @@ void extract_type(gul14::string_view extract, Step& step)
         case "end"_sh:
             step.set_type(Step::type_end); break;
         default:
-            throw Error(gul14::cat("type: unable to parse ('", keyword, "')"));
+            throw Error(gul14::cat("type: unable to parse (\"", escape(keyword), "\")"));
     }
 }
 
@@ -174,7 +128,7 @@ TimePoint extract_time(const std::string& issue, gul14::string_view extract)
     std::tm t;
 
     if (strptime(std::string{ extract }.c_str(), "%Y-%m-%d %H:%M:%S",&t) == nullptr)
-        throw Error(gul14::cat(issue, ": unable to parse time ('", extract, "')"));
+        throw Error(gul14::cat(issue, ": unable to parse time (\"", escape(extract), "\")"));
     t.tm_isdst = -1; // Daylight Saving Time (DST) is unknown -> use local time zone
     auto convert = std::mktime(&t);
 
@@ -186,39 +140,7 @@ void extract_time_of_last_execution(gul14::string_view extract, Step& step)
     step.set_time_of_last_execution(extract_time("time of last execution", extract));
 }
 
-void extract_timeout(gul14::string_view extract, Step& step)
-{
-    auto start_timeout = extract.find_first_not_of(" \t");
-    if (start_timeout == std::string::npos)
-        throw Error(gul14::cat("timeout: unable to parse ('", extract, "')"));
-
-    auto timeout = gul14::trim(extract.substr(start_timeout));
-    if ("infinite" == timeout)
-        step.set_timeout(Step::infinite_timeout);
-    else
-    {
-        try
-        {
-            step.set_timeout(std::chrono::milliseconds(std::stoull(timeout)));
-        }
-        catch(...) // catch any exception from std::stoull (Step::set_timeout is nothrow).
-        {
-            throw Error(gul14::cat("timeout: unable to parse number ('", timeout, "')"));
-        }
-    }
-}
-
-void extract_disabled(gul14::string_view extract, Step& step)
-{
-    bool val{ };
-    std::stringstream ss{ std::string{ extract } };
-    ss >> std::boolalpha >> val;
-    if (ss.fail())
-        throw Error("disabled: unknown value, expect true or false");
-    step.set_disabled(val);
-}
-
-} // namespace anonymous
+} // anonymous namespace
 
 std::istream& operator>>(std::istream& stream, Step& step)
 {
@@ -281,11 +203,11 @@ std::istream& operator>>(std::istream& stream, Step& step)
                 break;
 
             case "timeout"_sh:
-                extract_timeout(remaining_line, step_internal);
+                step_internal.set_timeout(parse_timeout(remaining_line));
                 break;
 
             case "disabled"_sh:
-                extract_disabled(remaining_line, step_internal);
+                step_internal.set_disabled(parse_bool(remaining_line));
                 break;
 
             default:
@@ -322,45 +244,87 @@ std::istream& operator>>(std::istream& stream, Step& step)
     return stream;
 }
 
-Step deserialize_step(const std::filesystem::path& path)
+Step load_step(const std::filesystem::path& lua_file)
 {
     Step step{};
-    std::ifstream stream(path);
+    std::ifstream stream(lua_file);
 
     if (not stream.is_open())
-        throw Error(gul14::cat("I/O error: unable to open file '", path.string(), "'"));
+        throw Error(gul14::cat("I/O error: unable to open file \"", escape(lua_file.string()), '"'));
 
     stream >> step; // RAII closes the stream (let the destructor do the job)
 
     return step;
 }
 
-Sequence deserialize_sequence(const std::filesystem::path& path)
+void load_sequence_parameters(const std::filesystem::path& folder, Sequence& sequence)
 {
-    if (path.empty())
-        throw Error("Must specify a valid path. Currently it is empty.");
-    else if (not std::filesystem::exists(path))
-        throw Error(gul14::cat("Path does not exist: '", path.string(), "'"));
+    if (not std::filesystem::exists(folder))
+        throw Error(gul14::cat("Folder does not exist: \"", escape(folder.string()), '"'));
 
-    auto label = unescape_filename_characters(path.filename().string());
-    Sequence seq{label};
+    auto stream = std::ifstream(folder / sequence_lua_filename);
 
-    std::vector<std::filesystem::path> steps;
-    for (auto const& entry : std::filesystem::directory_iterator{path})
-        if (entry.is_regular_file())
-            steps.push_back(entry.path());
+    std::string step_setup_script;
 
-    if (steps.empty())
-        throw Error(gul14::cat("No steps found: ", path.string()));
+    std::string line;
+    if (stream.good())
+    {
+        while(std::getline(stream, line, '\n'))
+        {
+            auto keyword = gul14::trim_left_sv(line);
 
-    std::sort(std::begin(steps), std::end(steps),
-        [](const auto& lhs, const auto& rhs) -> bool
-        { return lhs.filename() < rhs.filename(); });
+            if (gul14::starts_with(keyword, "-- maintainers:"))
+                sequence.set_maintainers(keyword.substr(15));
+            else if (gul14::starts_with(keyword, "-- label:"))
+                sequence.set_label(gul14::trim_sv(keyword.substr(9)));
+            else if (gul14::starts_with(keyword, "-- timeout:"))
+                sequence.set_timeout(parse_timeout(keyword.substr(11)));
+            else if (gul14::starts_with(keyword, "-- tags:"))
+                sequence.set_tags(parse_tags(keyword.substr(8)));
+            else if (gul14::starts_with(keyword, "-- autorun:"))
+                sequence.set_autorun(parse_bool(keyword.substr(11)));
+            else if (gul14::starts_with(keyword, "-- disabled:"))
+                sequence.set_disabled(parse_bool(keyword.substr(12)));
+            else
+                step_setup_script += (line + '\n');
+        }
 
-    for(auto entry: steps)
-        seq.push_back(deserialize_step(entry));
+        sequence.set_step_setup_script(step_setup_script);
+    }
+}
 
-    return seq;
+std::vector<Tag> parse_tags(gul14::string_view str)
+{
+    const auto tokens = gul14::tokenize_sv(str);
+
+    std::vector<Tag> tags(tokens.size());
+    std::transform(tokens.begin(), tokens.end(), tags.begin(),
+                   [](gul14::string_view token) { return Tag{ token }; });
+    return tags;
+}
+
+bool parse_bool(gul14::string_view str)
+{
+    auto bool_expression{gul14::trim_sv(str)};
+    if (bool_expression == "true" )
+        return true;
+    else if (bool_expression == "false")
+        return false;
+    throw Error(gul14::cat("Cannot parse bool expression from \"", escape(str), '"'));
+}
+
+Timeout parse_timeout(gul14::string_view str)
+{
+    str = gul14::trim_sv(str);
+
+    if (gul14::equals_nocase(str, "infinite"))
+        return Timeout::infinity();
+
+    const auto maybe_msec = gul14::to_number<unsigned long long>(str);
+    if (!maybe_msec)
+        throw Error(gul14::cat("Cannot parse timeout from \"", escape(str), '"'));
+
+    return Timeout{ std::chrono::milliseconds{ *maybe_msec } };
 }
 
 } // namespace task

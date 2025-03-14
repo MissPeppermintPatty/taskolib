@@ -1,6 +1,6 @@
 /**
  * \file   internals.h
- * \author Lars Froehlich, Marcus Walla
+ * \author Lars Fröhlich, Marcus Walla
  * \date   Created on August 30, 2022
  * \brief  Declaration of internal constants and functions.
  *
@@ -32,16 +32,28 @@
 
 namespace task {
 
+/// An enum detailing the possible causes of the termination of a sequence.
+enum class ErrorCause { terminated_by_script, aborted, uncaught_error };
+
+/// Define the Lua sequence filename for storing and loading Lua script.
+const char sequence_lua_filename[] = "sequence.lua";
+
 /**
  * A marker string (the word "ABORT" surrounded by Unicode stop signs) whose presence
  * anywhere in an error message signals that the execution of a script should be stopped.
  */
 extern const gul14::string_view abort_marker;
 
-enum class ErrorCause { terminated_by_script, aborted, uncaught_error };
+/**
+ * Throw an exception if the string contains control characters.
+ *
+ * \exception Error is thrown if the string contains any control characters.
+ */
+void check_for_control_characters(gul14::string_view str);
 
 /**
- * Remove abort markers from the given error message and determine the cause of the error.
+ * Remove abort markers from the given error message, beautify it, and determine the cause
+ * of the error.
  *
  * If at least two abort markers are present, the message is truncated to the text between
  * the first two of these markers. Otherwise, all markers are simply removed.
@@ -57,6 +69,10 @@ enum class ErrorCause { terminated_by_script, aborted, uncaught_error };
  *     by the running script. The error message is set to a corresponding explanation
  *     ("Script called terminate_sequence()") and ErrorCause::terminated_by_script is
  *     returned.
+ *
+ * If the message contains a Lua stack trace, the function highlights its start by
+ * including a UTF-8 bullet point symbol to visually separate the main message text from
+ * the stack trace.
  *
  * \returns a pair consisting of the (possibly) modified error message and of an
  *          ErrorCause.

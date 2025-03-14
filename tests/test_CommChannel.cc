@@ -1,10 +1,10 @@
 /**
  * \file   test_CommChannel.cc
- * \author Lars Froehlich
+ * \author Lars Fröhlich
  * \date   Created on June 8, 2022
- * \brief  Test suite for the CommChannel class.
+ * \brief  Test suite for the CommChannel struct.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -22,60 +22,18 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-#include <thread>
 #include <type_traits>
+
 #include <gul14/catch.h>
+
 #include "taskolib/CommChannel.h"
 
 using namespace task;
-using namespace std::literals;
 
 TEST_CASE("CommChannel: Constructor", "[CommChannel]")
 {
     static_assert(std::is_default_constructible_v<CommChannel>,
-        "CommChannel is default constructible");
+        "CommChannel is default-constructible");
 
     CommChannel c;
-}
-
-/// send_message()
-
-TEST_CASE("send_message() across threads", "[CommChannel][send_message]")
-{
-    const auto timestamp = Clock::now();
-
-    CommChannel comm;
-
-    // Does nothing
-    send_message(nullptr, Message::Type::output, "Test", timestamp, 0);
-
-    std::thread sender([=,&comm]()
-        {
-            for (int i = 1; i <= 100; ++i)
-            {
-                send_message(&comm, Message::Type::step_started, "start",
-                    timestamp + std::chrono::seconds{ i }, i);
-                send_message(&comm, Message::Type::step_stopped, "stop",
-                    timestamp + std::chrono::seconds{ i + 1 }, i);
-            }
-        });
-
-    for (int i = 1; i <= 100; ++i)
-    {
-        Message msg = comm.queue_.pop();
-        REQUIRE(msg.get_type() == Message::Type::step_started);
-        REQUIRE(msg.get_text() == "start");
-        REQUIRE(msg.get_timestamp() == timestamp + std::chrono::seconds{ i });
-        REQUIRE(msg.get_index().has_value());
-        REQUIRE(*(msg.get_index()) == i);
-
-        msg = comm.queue_.pop();
-        REQUIRE(msg.get_type() == Message::Type::step_stopped);
-        REQUIRE(msg.get_text() == "stop");
-        REQUIRE(msg.get_timestamp() == timestamp + std::chrono::seconds{ i + 1 });
-        REQUIRE(msg.get_index().has_value());
-        REQUIRE(*(msg.get_index()) == i);
-    }
-
-    sender.join();
 }

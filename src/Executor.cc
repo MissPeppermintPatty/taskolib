@@ -1,10 +1,10 @@
 /**
  * \file   Executor.cc
- * \author Lars Froehlich, Marcus Walla
+ * \author Lars Fröhlich, Ulf Fini Jastrow, Marcus Walla
  * \date   Created on May 30, 2022
  * \brief  Implementation of the Executor class.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -23,9 +23,10 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <gul14/cat.h>
+
+#include "lua_details.h"
 #include "sol/sol.hpp"
 #include "taskolib/Executor.h"
-#include "lua_details.h"
 
 using gul14::cat;
 using namespace std::literals;
@@ -34,28 +35,25 @@ namespace task {
 
 namespace {
 
-void print_to_message_queue(const std::string& text, OptionalStepIndex idx,
-                            CommChannel* comm_channel)
+// The sequence/single-step execution function to be started with launch_async_execution().
+//
+// If step_index is nullopt, this function calls Sequence::execute() to run the entire
+// sequence. If step_index contains a step index, it calls
+// Sequence::execute_single_step(). In both cases, all exceptions are silently
+//
+// \param sequence        The Sequence to be started
+// \param context         The Context under which the sequence should run
+// \param comm            Shared pointer to a CommChannel for communication (can be null)
+// \param opt_step_index  The index of the step to be started in isolation or nullopt to
+//                        start the entire sequence
+VariableTable execute_sequence(Sequence sequence, Context context,
+    std::shared_ptr<CommChannel> comm, OptionalStepIndex opt_step_index) noexcept
 {
-    send_message(comm_channel, Message::Type::output, text, Clock::now(), idx);
-}
+    // Ignore any returned errors - the sequence already takes care of sending the
+    // appropriate messages.
+    (void)sequence.execute(context, comm.get(), opt_step_index);
 
-void log_info_to_message_queue(const std::string& text, OptionalStepIndex idx,
-                               CommChannel* comm_channel)
-{
-    send_message(comm_channel, Message::Type::log_info, text, Clock::now(), idx);
-}
-
-void log_warning_to_message_queue(const std::string& text, OptionalStepIndex idx,
-                                  CommChannel* comm_channel)
-{
-    send_message(comm_channel, Message::Type::log_warning, text, Clock::now(), idx);
-}
-
-void log_error_to_message_queue(const std::string& text, OptionalStepIndex idx,
-                                CommChannel* comm_channel)
-{
-    send_message(comm_channel, Message::Type::log_error, text, Clock::now(), idx);
+    return context.variables;
 }
 
 } // anonymous namespace
@@ -72,23 +70,19 @@ void Executor::cancel()
         return;
 
     comm_channel_->immediate_termination_requested_ = true;
+    while (comm_channel_->queue_.try_pop());
     context_.variables = future_.get(); // Wait for thread to join
     comm_channel_->immediate_termination_requested_ = false;
 }
 
-VariableTable Executor::execute_sequence(Sequence sequence, Context context,
-                                         std::shared_ptr<CommChannel> comm) noexcept
-{
-    try
-    {
-        sequence.execute(context, comm.get());
-    }
-    catch (const std::exception&)
-    {
-        // Silently ignore any thrown exception - the sequence already takes care of
-        // sending the appropriate messages.
-    }
-    return context.variables;
+void Executor::cancel(Sequence& sequence) {
+    if (not future_.valid())
+        return;
+    comm_channel_->immediate_termination_requested_ = true;
+    while(update(sequence));
+    if (future_.valid())
+        context_.variables = future_.get();
+    comm_channel_->immediate_termination_requested_ = false; // Successfully terminated, rearm comm_channel
 }
 
 bool Executor::is_busy()
@@ -105,7 +99,8 @@ bool Executor::is_busy()
     return false;
 }
 
-void Executor::run_asynchronously(Sequence& sequence, Context context)
+void Executor::launch_async_execution(Sequence& sequence, Context context,
+                                      OptionalStepIndex step_index)
 {
     if (future_.valid())
         throw Error("Busy executing another sequence");
@@ -113,17 +108,28 @@ void Executor::run_asynchronously(Sequence& sequence, Context context)
     // Store a copy of the context for its local print and logging functions
     context_ = context;
 
-    // Redirect the output functions used by the parallel thread to the message queue
-    context.print_function = print_to_message_queue;
-    context.log_info_function = log_info_to_message_queue;
-    context.log_warning_function = log_warning_to_message_queue;
-    context.log_error_function = log_error_to_message_queue;
+    // Disable any message callbacks in the worker thread
+    context.message_callback_function = nullptr;
 
     future_ = std::async(std::launch::async, execute_sequence, sequence,
-                         std::move(context), comm_channel_);
+                         std::move(context), comm_channel_, step_index);
 
     sequence.set_running(true);
-    sequence.set_error_message("");
+    sequence.set_error(gul14::nullopt);
+}
+
+void Executor::run_asynchronously(Sequence& sequence, Context context)
+{
+    launch_async_execution(sequence, context, gul14::nullopt);
+}
+
+void Executor::run_single_step_asynchronously(Sequence& sequence, Context context,
+                                              StepIndex step_index)
+{
+    if (step_index >= sequence.size())
+        throw Error(cat("Invalid step index ", step_index));
+
+    launch_async_execution(sequence, context, step_index);
 }
 
 bool Executor::update(Sequence& sequence)
@@ -146,34 +152,21 @@ bool Executor::update(Sequence& sequence)
                 sequence.set_running(was_running);
             };
 
+        if (context_.message_callback_function)
+            context_.message_callback_function(msg);
+
         switch (msg.get_type())
         {
         case Message::Type::output:
-            if (context_.print_function)
-                context_.print_function(msg.get_text(), step_idx, nullptr);
-            break;
-        case Message::Type::log_info:
-            if (context_.log_info_function)
-                context_.log_info_function(msg.get_text(), step_idx, nullptr);
-            break;
-        case Message::Type::log_warning:
-            if (context_.log_warning_function)
-                context_.log_warning_function(msg.get_text(), step_idx, nullptr);
-            break;
-        case Message::Type::log_error:
-            if (context_.log_error_function)
-                context_.log_error_function(msg.get_text(), step_idx, nullptr);
-            break;
+            break; // only triggers callback
         case Message::Type::sequence_started:
-            break;
+            break; // only triggers callback
         case Message::Type::sequence_stopped:
             sequence.set_running(false);
             break;
         case Message::Type::sequence_stopped_with_error:
             sequence.set_running(false);
-            sequence.set_error_message(msg.get_text());
-            if (context_.log_error_function)
-                context_.log_error_function(msg.get_text(), step_idx, nullptr);
+            sequence.set_error(Error{ msg.get_text(), msg.get_index() });
             break;
         case Message::Type::step_started:
             modify_step([ts = msg.get_timestamp()](Step& s)
@@ -187,8 +180,6 @@ bool Executor::update(Sequence& sequence)
             break;
         case Message::Type::step_stopped_with_error:
             modify_step([](Step& s) { s.set_running(false); });
-            if (context_.log_error_function)
-                context_.log_error_function(msg.get_text(), step_idx, nullptr);
             break;
         default:
             throw Error(cat("Unknown message type ", static_cast<int>(msg.get_type())));

@@ -1,10 +1,10 @@
 /**
  * \file   Step.h
- * \author Lars Froehlich, Marcus Walla
+ * \author Lars Fröhlich, Marcus Walla
  * \date   Created on November 26, 2021
  * \brief  Declaration of the Step class.
  *
- * \copyright Copyright 2021-2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2021-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -28,9 +28,12 @@
 #include <chrono>
 #include <set>
 #include <string>
+
 #include "taskolib/CommChannel.h"
 #include "taskolib/Context.h"
 #include "taskolib/time_types.h"
+#include "taskolib/Timeout.h"
+#include "taskolib/TimeoutTrigger.h"
 #include "taskolib/VariableName.h"
 
 namespace task {
@@ -56,10 +59,6 @@ public:
         type_catch
     };
 
-    /// A constant to use for "infinite" timeout durations
-    static constexpr std::chrono::milliseconds
-        infinite_timeout{ std::chrono::milliseconds::max() };
-
     /// Maximum allowed level of indentation (or nesting of steps)
     static constexpr short max_indentation_level{ 20 };
 
@@ -76,10 +75,11 @@ public:
      * This function performs the following steps:
      * 1. A fresh script runtime environment is prepared and safe library components are
      *    loaded into it.
-     * 2. The lua_init_function from the context is run if it is defined (non-null).
-     * 3. Selected variables are imported from the context into the runtime environment.
-     * 4. The script from the step is loaded into the runtime environment and executed.
-     * 5. Selected variables are exported from the runtime environment back into the
+     * 2. The step_setup_function from the context is run if it is defined (non-null).
+     * 3. The step setup script is run.
+     * 4. Selected variables are imported from the context into the runtime environment.
+     * 5. The script from the step is loaded into the runtime environment and executed.
+     * 6. Selected variables are exported from the runtime environment back into the
      *    context.
      *
      * Certain step types (IF, ELSEIF, WHILE) require the script to return a boolean
@@ -97,53 +97,27 @@ public:
      *                        successfully
      *                      - A message of type step_stopped_with_error when the step has
      *                        been stopped due to an error condition
-     * \param index         Index of the step in its parent Sequence.
+     * \param opt_step_index  Optional index of the step in its parent Sequence (to be
+     *                        used in exceptions and messages)
+     * \param sequence_timeout Pointer to a sequence timeout to determine a timeout during
+     *                      executing a step. If this is null the corresponding check for
+     *                      timeout is omitted.
      *
      * \return If the step type requires a boolean return value (IF, ELSEIF, WHILE), this
      *         function returns the return value of the script. For other step types
      *         (ACTION etc.), it returns false.
      *
-     * \exception Error or ErrorAtIndex is thrown if the script cannot be started, if
+     * \exception Error is thrown if the script cannot be started, if
      *            there is a Lua error during execution, if the script has an
      *            inappropriate return value for the step type (see above), if a timeout
      *            is encountered, or if termination has been requested via the
      *            communication channel or explicitly by the script.
+     *
+     * \see For more information about step setup scripts see at Sequence.
      */
-    bool execute(Context& context, CommChannel* comm_channel, StepIndex index);
-
-    /**
-     * Execute the step script within the given context (without messaging).
-     *
-     * This function performs the following steps:
-     * 1. A fresh script runtime environment is prepared and safe library components are
-     *    loaded into it.
-     * 2. The lua_init_function from the context is run if it is defined (non-null).
-     * 3. Selected variables are imported from the context into the runtime environment.
-     * 4. The script from the step is loaded into the runtime environment and executed.
-     * 5. Selected variables are exported from the runtime environment back into the
-     *    context.
-     *
-     * Certain step types (IF, ELSEIF, WHILE) require the script to return a boolean
-     * value. Not returning a value or returning a different type is considered an error.
-     * Conversely, the other step types (ACTION etc.) do not allow returning values from
-     * the script, with the exception of nil.
-     *
-     * \param context       The context to be used for executing the step
-     *
-     * \return If the step type requires a boolean return value (IF, ELSEIF, WHILE), this
-     *         function returns the return value of the script. For other step types
-     *         (ACTION etc.), it returns false.
-     *
-     * \exception Error or ErrorAtIndex is thrown if the script cannot be started, if
-     *            there is a Lua error during execution, if the script has an
-     *            inappropriate return value for the step type (see above), if a timeout
-     *            is encountered, or if termination has been requested explicitly by the
-     *            script.
-     */
-    bool execute(Context& context)
-    {
-        return execute(context, nullptr, 0);
-    }
+    bool execute(Context& context, CommChannel* comm_channel = nullptr,
+                 OptionalStepIndex opt_step_index = gul14::nullopt,
+                 TimeoutTrigger* sequence_timeout = nullptr);
 
     /**
      * Retrieve the names of the variables that should be im-/exported to and from the
@@ -211,7 +185,7 @@ public:
     TimePoint get_time_of_last_modification() const { return time_of_last_modification_; }
 
     /// Return the timeout duration for executing the script.
-    std::chrono::milliseconds get_timeout() const { return timeout_; }
+    Timeout get_timeout() const { return timeout_; }
 
     /// Return the type of this step.
     Type get_type() const noexcept { return type_; }
@@ -276,11 +250,8 @@ public:
      */
     Step& set_time_of_last_modification(TimePoint t);
 
-    /**
-     * Set the timeout duration for executing the script.
-     * Negative values set the timeout to zero.
-     */
-    Step& set_timeout(std::chrono::milliseconds timeout);
+    /// Set the timeout duration for executing the script.
+    Step& set_timeout(Timeout timeout);
 
     /**
      * Set the type of this step.
@@ -298,7 +269,7 @@ private:
     VariableNames used_context_variable_names_;
     TimePoint time_of_last_modification_{ Clock::now() };
     TimePoint time_of_last_execution_;
-    std::chrono::milliseconds timeout_{ infinite_timeout };
+    Timeout timeout_;
     Type type_{ type_action };
     short indentation_level_{ 0 };
     bool is_running_{ false };
@@ -306,25 +277,45 @@ private:
 
     /**
      * Copy the variables listed in used_context_variable_names_ from the given Context
-     * into a LUA state.
+     * into a Lua state.
      */
     void copy_used_variables_from_context_to_lua(const Context& context, sol::state& lua);
 
     /**
-     * Copy the variables listed in used_context_variable_names_ from a LUA state into the
+     * Copy the variables listed in used_context_variable_names_ from a Lua state into the
      * given Context.
      */
     void copy_used_variables_from_lua_to_context(const sol::state& lua, Context& context);
 
     /**
      * Execute the Lua script, throwing an exception if anything goes wrong.
-     * \see execute(Context&, CommChannel*, StepIndex)
+     * \see execute(Context&, CommChannel*, OptionalStepIndex, TimeoutTrigger*)
      */
-    bool execute_impl(Context& context, CommChannel* comm_channel, StepIndex index);
+    bool execute_impl(Context& context, CommChannel* comm_channel
+        , OptionalStepIndex index, TimeoutTrigger* sequence_timeout);
 };
+
+/// Alias for a step type collection that executes a script.
+using ExecutionSteps = std::set<Step::Type>;
+
+/// Step types that execute a script.
+const ExecutionSteps execution_steps{
+    Step::type_action,
+    Step::type_if,
+    Step::type_elseif,
+    Step::type_while
+    };
 
 /// Return a lower-case name for a step type ("action", "if", "end").
 std::string to_string(Step::Type type);
+
+/**
+ * Determine if a script is executed.
+ *
+ * \param step_type step type to check
+ * \return true for executing a script otherwise false.
+ */
+bool executes_script(Step::Type step_type);
 
 /// Determine if a certain step type requires a boolean return value from the script.
 bool requires_bool_return_value(Step::Type step_type) noexcept;

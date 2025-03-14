@@ -1,10 +1,10 @@
 /**
- * \file   console.cc
- * \author Lars Froehlich
- * \date   Created on June 22, 2022
- * \brief  Implementation of several functions for console output.
+ * \file   send_message.cc
+ * \author Lars Fröhlich
+ * \date   Created on January 30, 2023, based on older code
+ * \brief  Declaration of the send_message() function.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -22,29 +22,23 @@
 
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-#include <iostream>
-#include "taskolib/console.h"
+#include "send_message.h"
 
 namespace task {
 
-void print_to_stdout(const std::string& str, OptionalStepIndex, CommChannel*)
+void send_message(Message::Type type, gul14::string_view text, TimePoint timestamp,
+                  OptionalStepIndex index, const Context& context,
+                  CommChannel* comm_channel)
 {
-    std::cout << str;
-}
+    Message msg{ type, std::string(text), timestamp, index };
 
-void print_info_to_stdout(const std::string& str, OptionalStepIndex, CommChannel*)
-{
-    std::cout << "INFO: " << str << "\n";
-}
+    if (context.message_callback_function)
+        context.message_callback_function(msg);
 
-void print_warning_to_stdout(const std::string& str, OptionalStepIndex, CommChannel*)
-{
-    std::cout << "WARNING: " << str << "\n";
-}
+    if (comm_channel == nullptr)
+        return;
 
-void print_error_to_stdout(const std::string& str, OptionalStepIndex, CommChannel*)
-{
-    std::cout << "ERROR: " << str << "\n";
+    comm_channel->queue_.push(std::move(msg));
 }
 
 } // namespace task

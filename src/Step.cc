@@ -1,10 +1,10 @@
 /**
- * \file   Step.cc
- * \author Lars Froehlich, Marcus Walla
- * \date   Created on December 7, 2021
- * \brief  Implementation of the Step class.
+ * \file    Step.cc
+ * \authors Lars Fröhlich, Marcus Walla
+ * \date    Created on December 7, 2021
+ * \brief   Implementation of the Step class.
  *
- * \copyright Copyright 2021-2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2021-2024 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -28,6 +28,7 @@
 
 #include "internals.h"
 #include "lua_details.h"
+#include "send_message.h"
 #include "sol/sol.hpp"
 #include "taskolib/exceptions.h"
 #include "taskolib/execute_lua_script.h"
@@ -61,18 +62,16 @@ void Step::copy_used_variables_from_context_to_lua(const Context& context, sol::
             {
                 using T = std::decay_t<decltype(value)>;
 
-                if constexpr (std::is_same_v<T, double> or std::is_same_v<T, long long> or
-                              std::is_same_v<T, std::string> or std::is_same_v<T, bool>)
-                {
-                    lua[varname_str] = value;
-                }
-                else if constexpr (std::is_same_v<T, sol::lua_nil_t>) {
-                    lua[varname_str] = sol::lua_nil_t{ };
-                }
+                if constexpr (std::is_same_v<T, VarInteger>)
+                    lua[varname_str] = LuaInteger{ value };
+                else if constexpr (std::is_same_v<T, VarFloat>)
+                    lua[varname_str] = LuaFloat{ value };
+                else if constexpr (std::is_same_v<T, VarString>)
+                    lua[varname_str] = LuaString{ value };
+                else if constexpr (std::is_same_v<T, VarBool>)
+                    lua[varname_str] = LuaBool{ value };
                 else
-                {
                     static_assert(always_false_v<T>, "Unhandled type in variable import");
-                }
             },
             it->second);
     }
@@ -89,47 +88,59 @@ void Step::copy_used_variables_from_lua_to_context(const sol::state& lua, Contex
         {
             case sol::type::number:
                 // For this check to work, SOL_SAFE_NUMERICS needs to be set to 1
-                if (var.is<long long>())
-                    context.variables[varname] = VariableValue{ var.as<long long>() };
+                if (var.is<LuaInteger>())
+                    context.variables[varname] = VarInteger{ var.as<LuaInteger>() };
                 else
-                    context.variables[varname] = VariableValue{ var.as<double>() };
+                    context.variables[varname] = VarFloat{ var.as<LuaFloat>() };
                 break;
             case sol::type::string:
-                context.variables[varname] = VariableValue{ var.as<std::string>() };
+                context.variables[varname] = VarString{ var.as<LuaString>() };
                 break;
             case sol::type::boolean:
-                context.variables[varname] = VariableValue{ var.as<bool>() };
+                context.variables[varname] = VarBool{ var.as<LuaBool>() };
                 break;
             case sol::type::lua_nil:
                 context.variables.erase(varname);
                 break;
             default:
-                break;
+                throw Error(cat("Variable ", varname.string(),
+                    " cannot be exported because it is of the unsupported type '",
+                    sol::type_name(lua.lua_state(), var.get_type()), "'."));
         }
     }
 }
 
-bool Step::execute_impl(Context& context, CommChannel* comm, StepIndex index)
+bool Step::execute_impl(Context& context, CommChannel* comm,
+                        OptionalStepIndex opt_step_index,
+                        TimeoutTrigger* sequence_timeout)
 {
     sol::state lua;
 
     open_safe_library_subset(lua);
-    install_custom_commands(lua, context);
+    install_custom_commands(lua);
 
-    if (context.lua_init_function)
-        context.lua_init_function(lua);
+    if (context.step_setup_function)
+        context.step_setup_function(lua);
 
-    install_timeout_and_termination_request_hook(lua, Clock::now(), get_timeout(), index,
-                                                 comm);
+    install_timeout_and_termination_request_hook(lua, Clock::now(), get_timeout(),
+                                                 opt_step_index, context, comm,
+                                                 sequence_timeout);
+
+    if (executes_script(get_type()) and not context.step_setup_script.empty())
+    {
+        const auto result = execute_lua_script(lua, context.step_setup_script);
+        if (not result.has_value())
+            throw Error(gul14::cat("[setup] ", result.error()));
+    }
 
     copy_used_variables_from_context_to_lua(context, lua);
-    const auto result_or_error = execute_lua_script(lua, get_script());
+    const auto result = execute_lua_script(lua, get_script());
     copy_used_variables_from_lua_to_context(lua, context);
 
-    if (std::holds_alternative<std::string>(result_or_error))
-        throw Error(std::get<std::string>(result_or_error));
+    if (not result.has_value())
+        throw Error(result.error());
 
-    const auto& obj = std::get<sol::object>(result_or_error);
+    const auto& obj = result.value();
 
     if (requires_bool_return_value(get_type()))
     {
@@ -153,7 +164,8 @@ bool Step::execute_impl(Context& context, CommChannel* comm, StepIndex index)
     }
 }
 
-bool Step::execute(Context& context, CommChannel* comm, StepIndex index)
+bool Step::execute(Context& context, CommChannel* comm, OptionalStepIndex index,
+                 TimeoutTrigger* sequence_timeout)
 {
     const auto now = Clock::now();
     const auto set_is_running_to_false_after_execution =
@@ -161,33 +173,38 @@ bool Step::execute(Context& context, CommChannel* comm, StepIndex index)
 
     set_time_of_last_execution(now);
     set_running(true);
-    send_message(comm, Message::Type::step_started, "Step started", now, index);
+    send_message(Message::Type::step_started, "Step started", now, index, context, comm);
 
     try
     {
-        const bool result = execute_impl(context, comm, index);
+        const bool result = execute_impl(context, comm, index, sequence_timeout);
 
-        send_message(comm, Message::Type::step_stopped,
+        send_message(Message::Type::step_stopped,
             requires_bool_return_value(get_type())
                 ? cat("Step finished (logical result: ", result ? "true" : "false", ')')
                 : "Step finished"s,
-            Clock::now(), index);
+            Clock::now(), index, context, comm);
 
         return result;
     }
     catch(const std::exception& e)
     {
         auto [msg, _] = remove_abort_markers(e.what());
-        send_message(comm, Message::Type::step_stopped_with_error, msg, Clock::now(),
-                     index);
-        throw ErrorAtIndex(e.what(), index);
+        send_message(Message::Type::step_stopped_with_error, msg, Clock::now(), index,
+                     context, comm);
+        throw Error(e.what(), index);
     }
 }
 
 Step& Step::set_disabled(bool disable)
 {
-    is_disabled_ = disable;
-    set_time_of_last_modification(Clock::now());
+    // This setter is always called from Sequence::enforce_consistency_of_disabled_flags()
+    // We must not change the modification time if we are not modified,
+    // or the modification time will always be the last enforce...() time
+    if (is_disabled_ != disable) {
+        is_disabled_ = disable;
+        set_time_of_last_modification(Clock::now());
+    }
     return *this;
 }
 
@@ -238,12 +255,9 @@ Step& Step::set_time_of_last_modification(TimePoint t)
     return *this;
 }
 
-Step& Step::set_timeout(std::chrono::milliseconds timeout)
+Step& Step::set_timeout(Timeout timeout)
 {
-    if (timeout < 0s)
-        timeout_ = 0s;
-    else
-        timeout_ = timeout;
+    timeout_ = timeout;
     return *this;
 }
 
@@ -266,7 +280,6 @@ Step& Step::set_used_context_variable_names(VariableNames&& used_context_variabl
     return *this;
 }
 
-
 //
 // Free functions
 //
@@ -286,6 +299,11 @@ std::string to_string(Step::Type type)
     }
 
     return "unknown";
+}
+
+bool executes_script(Step::Type step_type)
+{
+    return execution_steps.find(step_type) != execution_steps.end();
 }
 
 bool requires_bool_return_value(Step::Type step_type) noexcept

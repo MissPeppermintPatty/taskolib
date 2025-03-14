@@ -1,10 +1,10 @@
 /**
  * \file   test_lua_details.cc
- * \author Lars Froehlich
+ * \author Lars Fröhlich
  * \date   Created on October 28, 2022
  * \brief  Test suite for Lua-related internal functions.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -26,7 +26,7 @@
 
 #include <gul14/catch.h>
 
-#include "../src/lua_details.h"
+#include "lua_details.h"
 
 using namespace std::chrono;
 using namespace std::literals;
@@ -40,9 +40,9 @@ TEST_CASE("get_ms_since_epoch()", "[lua_details]")
     REQUIRE(get_ms_since_epoch(now, 100ms)
             == round<milliseconds>((now + 100ms).time_since_epoch()).count());
 
-    if constexpr (milliseconds::max().count() >= std::numeric_limits<long long>::max())
+    if constexpr (milliseconds::max().count() >= std::numeric_limits<LuaInteger>::max())
     {
         REQUIRE(get_ms_since_epoch(now, milliseconds::max())
-                == std::numeric_limits<long long>::max());
+                == std::numeric_limits<LuaInteger>::max());
     }
 }

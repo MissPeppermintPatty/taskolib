@@ -2,20 +2,26 @@
 test_src = files(
     'test_CommChannel.cc',
     'test_Context.cc',
+    'test_deserialize_sequence.cc',
     'test_exceptions.cc',
+    'test_execute_lua_script.cc',
     'test_Executor.cc',
-    #'tests/test_format.cc' needs fmt{} library
     'test_internals.cc',
     'test_LockedQueue.cc',
     'test_lua_details.cc',
     'test_main.cc',
     'test_Message.cc',
+    'test_send_message.cc',
     'test_Sequence.cc',
     'test_SequenceManager.cc',
     'test_serialize_sequence.cc',
     'test_Step.cc',
+    'test_Tag.cc',
     'test_time_types.cc',
+    'test_Timeout.cc',
+    'test_UniqueId.cc',
     'test_VariableName.cc',
+    #'tests/test_format.cc' needs fmt{} library
 )
 
 # The tests are executed in the build dir to avoid pollution of the git repository with

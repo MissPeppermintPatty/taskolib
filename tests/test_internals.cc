@@ -1,10 +1,10 @@
 /**
  * \file   test_internals.cc
- * \author Lars Froehlich
+ * \author Lars Fröhlich
  * \date   Created on November 4, 2022
  * \brief  Test suite for internal functions.
  *
- * \copyright Copyright 2022 Deutsches Elektronen-Synchrotron (DESY), Hamburg
+ * \copyright Copyright 2022-2023 Deutsches Elektronen-Synchrotron (DESY), Hamburg
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -25,7 +25,7 @@
 #include <gul14/cat.h>
 #include <gul14/catch.h>
 
-#include "../src/internals.h"
+#include "internals.h"
 
 using gul14::cat;
 using namespace task;
